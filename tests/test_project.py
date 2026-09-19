@@ -37,6 +37,7 @@ class ProjectTests(unittest.TestCase):
         try:
             check_env(env, warn=True)
             env.reset(seed=101)
+            self.assertAlmostEqual(env.env.sumo.simulation.getDeltaT(), config["simulation"]["step_length"])
             original_step = env.env._sumo_step
             states = []
             collisions = []
@@ -53,6 +54,8 @@ class ProjectTests(unittest.TestCase):
                 # force transitions without relying on a cooperative policy.
                 _, _, terminated, truncated, _ = env.step(env.signal.green_phase)
                 self.assertFalse(terminated)
+                self.assertAlmostEqual(env.env.sim_step % config["simulation"]["delta_time"], 0)
+            self.assertEqual(env.env.sim_step, config["simulation"]["duration_seconds"])
             self.assertGreater(env.forced_switches, 0)
             self.assertEqual(sum(collisions), 0)
             chunks = [(state, len(list(values))) for state, values in itertools.groupby(states)]

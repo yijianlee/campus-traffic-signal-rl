@@ -3,6 +3,7 @@
   "data_source": "synthetic_not_field_calibrated",
   "simulation": {
     "duration_seconds": 1800,
+    "step_length": 0.1,
     "delta_time": 5,
     "yellow_time": 3,
     "min_green": 10,

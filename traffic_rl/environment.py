@@ -14,6 +14,24 @@ configure_sumo()
 from sumo_rl import SumoEnvironment  # noqa: E402
 
 
+class SmoothSumoEnvironment(SumoEnvironment):
+    """Preserve SUMO-RL's one-second signal clock with subsecond vehicle motion."""
+
+    def __init__(self, *, step_length: float, **kwargs):
+        self.motion_steps_per_second = round(1 / step_length)
+        super().__init__(**kwargs)
+
+    def _sumo_step(self):
+        # SUMO-RL calls TrafficSignal.update() once after this method and that
+        # method increments its clock by one SECOND, not one physics step.
+        if self.use_gui:
+            for _ in range(self.motion_steps_per_second):
+                self.sumo.simulationStep()
+        else:
+            # Batch the same physics steps in SUMO, avoiding extra socket calls.
+            self.sumo.simulationStep(self.sim_step + 1)
+
+
 class IntersectionEnv(gym.Wrapper):
     def __init__(self, config: dict, scenario: str, seed: int, *, vary_demand: bool = False, gui: bool = False, gui_delay: int = 100, tripinfo: Path | None = None):
         self.config = config
@@ -29,10 +47,14 @@ class IntersectionEnv(gym.Wrapper):
         # SUMO-RL 1.4.5 splits additional_sumo_cmd on spaces. Paths below are
         # relative to ROOT and internally generated, with no whitespace.
         extra = "--no-step-log true --duration-log.disable true --xml-validation never"
+        step_length = sim.get("step_length", 0.1)
+        extra += f" --step-length {step_length}"
         if gui_delay < 0:
             raise ValueError("gui_delay must be nonnegative (milliseconds per simulation second).")
         if gui:
-            extra += f" --delay {gui_delay}"
+            # Keep CLI units in ms per simulated second as before. SUMO's
+            # delay option itself applies to each physics/rendering step.
+            extra += f" --delay {gui_delay * step_length:g}"
         if tripinfo:
             tripinfo.parent.mkdir(parents=True, exist_ok=True)
             relative = tripinfo.resolve().relative_to(ROOT).as_posix()
@@ -41,7 +63,8 @@ class IntersectionEnv(gym.Wrapper):
             extra += f" --tripinfo-output {relative} --tripinfo-output.write-unfinished true"
         # The CLI also changes to ROOT. Keep the same contract for direct use.
         os.chdir(ROOT)
-        env = SumoEnvironment(
+        env = SmoothSumoEnvironment(
+            step_length=step_length,
             net_file=net.relative_to(ROOT).as_posix(),
             route_file=route.relative_to(ROOT).as_posix(),
             single_agent=True, use_gui=gui, num_seconds=sim["duration_seconds"],
