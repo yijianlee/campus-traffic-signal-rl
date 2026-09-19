@@ -1,0 +1,37 @@
+{
+  "project": "campus-intersection-rl",
+  "data_source": "synthetic_not_field_calibrated",
+  "simulation": {
+    "duration_seconds": 1800,
+    "delta_time": 5,
+    "yellow_time": 3,
+    "min_green": 10,
+    "max_green": 60,
+    "fixed_green": 30,
+    "road_length_m": 300,
+    "speed_limit_mps": 11.11
+  },
+  "demand_vehicles_per_hour_per_approach": {
+    "balanced": {"N": 300, "S": 300, "E": 300, "W": 300},
+    "peak": {"N": 600, "S": 600, "E": 600, "W": 600},
+    "tidal": {"N": 600, "S": 450, "E": 150, "W": 150}
+  },
+  "reward": {"queue_weight": 1.0, "imbalance_weight": 0.0, "switch_weight": 0.0},
+  "training": {
+    "scenario": "balanced",
+    "seed": 42,
+    "total_timesteps": 30000,
+    "learning_rate": 0.0003,
+    "buffer_size": 50000,
+    "learning_starts": 500,
+    "batch_size": 64,
+    "gamma": 0.99,
+    "train_freq": 4,
+    "target_update_interval": 1000,
+    "exploration_fraction": 0.4,
+    "exploration_final_eps": 0.05,
+    "net_arch": [64, 64],
+    "device": "cpu"
+  },
+  "evaluation": {"seeds": [101, 102, 103], "scenarios": ["balanced", "peak", "tidal"]}
+}
