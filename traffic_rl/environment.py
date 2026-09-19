@@ -15,7 +15,7 @@ from sumo_rl import SumoEnvironment  # noqa: E402
 
 
 class IntersectionEnv(gym.Wrapper):
-    def __init__(self, config: dict, scenario: str, seed: int, *, vary_demand: bool = False, gui: bool = False, tripinfo: Path | None = None):
+    def __init__(self, config: dict, scenario: str, seed: int, *, vary_demand: bool = False, gui: bool = False, gui_delay: int = 100, tripinfo: Path | None = None):
         self.config = config
         self.scenario = scenario
         self.base_seed = seed
@@ -29,6 +29,10 @@ class IntersectionEnv(gym.Wrapper):
         # SUMO-RL 1.4.5 splits additional_sumo_cmd on spaces. Paths below are
         # relative to ROOT and internally generated, with no whitespace.
         extra = "--no-step-log true --duration-log.disable true --xml-validation never"
+        if gui_delay < 0:
+            raise ValueError("gui_delay must be nonnegative (milliseconds per simulation second).")
+        if gui:
+            extra += f" --delay {gui_delay}"
         if tripinfo:
             tripinfo.parent.mkdir(parents=True, exist_ok=True)
             relative = tripinfo.resolve().relative_to(ROOT).as_posix()

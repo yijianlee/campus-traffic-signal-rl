@@ -109,7 +109,7 @@ def evaluate(args, config):
             for policy in policies:
                 case = run / f"{scenario}_{seed}_{policy}"
                 tripinfo = case / "tripinfo.xml"
-                env = IntersectionEnv(config, scenario, seed, gui=args.gui, tripinfo=tripinfo)
+                env = IntersectionEnv(config, scenario, seed, gui=args.gui, gui_delay=args.gui_delay, tripinfo=tripinfo)
                 trace = []
                 try:
                     obs, _ = env.reset(seed=seed)
@@ -119,6 +119,12 @@ def evaluate(args, config):
                         obs, reward, terminated, truncated, info = env.step(action)
                         trace.append({key: info[key] for key in ("step", "requested_action", "selected_action", "phase", "green_age", "switched", "forced_switch", "queue_total", "queue_N", "queue_S", "queue_E", "queue_W")} | {"reward": reward})
                         done = terminated or truncated
+                    if args.gui and not args.no_gui_pause:
+                        print("Simulation complete. Window remains open. Press Enter in this terminal to close it and save results.", flush=True)
+                        try:
+                            input()
+                        except EOFError:
+                            print("No interactive input available; closing the window and saving results.", flush=True)
                 finally:
                     env.close()  # Flush unfinished trip records before parsing.
                 metrics = episode_metrics(tripinfo, route_file, config["simulation"]["duration_seconds"], trace)
@@ -155,11 +161,15 @@ def main():
     evaluation.add_argument("--seeds", nargs="+", type=int)
     evaluation.add_argument("--model")
     evaluation.add_argument("--gui", action="store_true", help="Open SUMO GUI for each episode")
+    evaluation.add_argument("--gui-delay", type=int, default=100, metavar="MS", help="GUI delay per simulation second in milliseconds (default: 100; 0: fastest)")
+    evaluation.add_argument("--no-gui-pause", action="store_true", help="Close GUI automatically at the end instead of waiting for Enter")
     for item in (build, training, evaluation):
         item.add_argument("--seconds", type=int, help="Override episode length in simulated seconds")
     for item in (training, evaluation):
         item.add_argument("--out", help="New output directory under the project; omit for timestamped directory")
     args = parser.parse_args()
+    if getattr(args, "gui_delay", 0) < 0:
+        parser.error("--gui-delay must be nonnegative")
     config = read_config(args.config)
     if getattr(args, "seconds", None) is not None:
         if args.seconds <= 0 or args.seconds % config["simulation"]["delta_time"]:

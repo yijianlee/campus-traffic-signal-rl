@@ -44,7 +44,9 @@ Repository: `campus-traffic-signal-rl`
 .\.venv\Scripts\python.exe -m traffic_rl evaluate --policies fixed --scenarios balanced --seeds 101 --seconds 600 --gui
 ```
 
-该命令会打开 SUMO 窗口。可以用界面中的 Delay 控件放慢动画。训练默认不打开窗口。
+该命令会打开 SUMO 窗口，默认每个仿真秒增加 100 毫秒延迟：600 秒场景约播放 1 分钟，另加计算开销。结束后保留最后画面；回到 PowerShell 按 Enter，关闭窗口并保存结果。训练默认不打开窗口。
+
+想更慢，可在命令末尾加 `--gui-delay 300`（600 秒场景约 3 分钟）；也可以在 SUMO 界面的 Delay 控件中实时调整。`--gui-delay 1000` 约为实时速度，`--gui-delay 0` 为最快速度。需要自动关闭窗口时加 `--no-gui-pause`。批量 GUI 评估会在每回合结束时等待 Enter；无交互输入时自动关闭并保存。
 
 ## 配置与文件
 
