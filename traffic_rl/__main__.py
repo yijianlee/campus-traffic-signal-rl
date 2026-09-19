@@ -140,7 +140,7 @@ def evaluate(args, config):
 
 def main():
     os.chdir(ROOT)
-    parser = argparse.ArgumentParser(description="校园路口强化学习项目")
+    parser = argparse.ArgumentParser(description="Campus Traffic Signal RL")
     parser.add_argument("--config", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Check packages, SUMO and Gymnasium connection")

@@ -1,5 +1,5 @@
 {
-  "project": "campus-intersection-rl",
+  "project": "campus-traffic-signal-rl",
   "data_source": "synthetic_not_field_calibrated",
   "simulation": {
     "duration_seconds": 1800,

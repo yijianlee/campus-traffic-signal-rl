@@ -1,6 +1,6 @@
 # 本次初步配置交付
 
-日期：2026-09-19。项目目录为当前“强化学习”工作区。
+日期：2026-09-19。项目名称：Campus Traffic Signal RL；仓库标识：`campus-traffic-signal-rl`。
 
 ## 已完成
 

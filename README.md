@@ -1,4 +1,8 @@
-# 校园周边路口的强化学习信号灯控制
+# Campus Traffic Signal RL
+
+A reproducible reinforcement learning project for traffic signal control at a single campus-area intersection.
+
+Repository: `campus-traffic-signal-rl`
 
 课程项目初始配置，2026-09-19。
 
@@ -6,7 +10,7 @@
 
 当前已经配置本地 Python 环境、SUMO 路口仿真、固定配时与排队优先基线、DQN 训练和统一评估流程。当前路口与车流均为人工构造，尚未采集或校准真实路口数据。
 
-本次安装、验证与交付记录见 [初步配置说明](docs/initial_setup.md)。已生成的三策略初始结果见 [评估报告](outputs/initial_evaluation/report.md)。
+本次安装、验证与交付记录见 [初步配置说明](docs/initial_setup.md)。运行结果保存在本地 `outputs/`；该目录不上传 GitHub，在新电脑上运行评估命令即可生成报告。
 
 ## 先运行起来
 
