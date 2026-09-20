@@ -151,6 +151,13 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Check packages, SUMO and Gymnasium connection")
     build = sub.add_parser("build", help="Generate network and evaluation demand")
+    show = sub.add_parser("show", help="Build and open the polished offline traffic presentation")
+    show.add_argument("--seconds", type=int, default=300)
+    show.add_argument("--seed", type=int, default=101)
+    show.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal"], default=["balanced", "peak", "tidal"])
+    show.add_argument("--model", help="Optional DQN model to include in the strategy switcher")
+    show.add_argument("--out", help="New output directory under the project")
+    show.add_argument("--no-open", action="store_true", help="Export without opening a browser")
     training = sub.add_parser("train", help="Train and verify DQN")
     training.add_argument("--steps", type=int)
     training.add_argument("--seed", type=int)
@@ -184,6 +191,9 @@ def main():
             for seed in config["evaluation"]["seeds"]:
                 path, count = routes(config, scenario, seed)
                 print(scenario, seed, count, path)
+    elif args.command == "show":
+        from .presentation import present
+        present(args, config)
     elif args.command == "train":
         train(args, config)
     else:

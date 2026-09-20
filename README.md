@@ -14,6 +14,28 @@ Repository: `campus-traffic-signal-rl`
 
 ## 先运行起来
 
+### 精美交通演示页面（推荐课堂展示）
+
+```powershell
+.\.venv\Scripts\python.exe -m traffic_rl show
+```
+
+先在后台运行 SUMO，记录三种车流下的固定配时和排队优先策略，再自动打开中文浏览器演示页面。页面包含校园路口俯视图、平滑车辆动画、信号灯、方向队列、实时车速和整段结果，支持策略切换、1–5 倍播放、暂停、拖动进度、缩放与专注演示。默认每段记录 300 秒仿真。
+
+要加入自己的 DQN 模型：
+
+```powershell
+.\.venv\Scripts\python.exe -m traffic_rl show --seconds 600 --model outputs/dqn_smoke/model.zip
+```
+
+这里的模型路径仅适用于本机已有短程模型；新克隆的仓库请使用实际训练得到的模型路径。DQN 是否训练充分会影响策略表现，页面不会预设它优于基线。
+
+生成结果位于命令打印的 `outputs/presentation_.../index.html`。之后直接双击该文件即可回放，无需再次启动 SUMO，也无需联网或安装 Node.js。分享时应保留整个输出文件夹，至少包含 `index.html`、`style.css`、`app.js`、`recordings.js`；用 `--no-open` 可以只导出不打开浏览器。
+
+该页面是 **SUMO 实际轨迹回放**，不是在线控制或实时训练。切换策略读取相同到达记录的另一段仿真，保留当前时间。指标基于记录采样，动画在采样之间插值；校园楼宇和绿化仅作示意，不代表真实地理位置或已模拟行人。底部指标明确为整段结果，右侧为当前回放状态。当前车速按路网中所有车辆计算，进口排队为四条进口车道速度低于 0.1 m/s 的车辆数。
+
+### 命令行与原生 SUMO 界面
+
 在本目录打开 PowerShell，直接调用项目 Python，无需激活环境。
 
 ```powershell
