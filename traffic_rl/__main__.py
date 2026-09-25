@@ -35,8 +35,8 @@ def doctor(args, config):
     import torch
     info = {"python": platform.python_version(), "platform": platform.platform(), "packages": versions(), "cuda_available": torch.cuda.is_available(), "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "sumo_binary": binary("sumo")}
     subprocess.run([binary("sumo"), "--version"], check=True, capture_output=True)
-    from .environment import IntersectionEnv
-    env = IntersectionEnv(config, "balanced", 101)
+    from .multi_environment import make_env, validate_model
+    env = make_env(config, "balanced", 101)
     try:
         observation, _ = env.reset(seed=101)
         _, reward, _, _, _ = env.step(0)
@@ -52,7 +52,7 @@ def train(args, config):
     from stable_baselines3 import DQN
     from stable_baselines3.common.logger import configure
     from stable_baselines3.common.monitor import Monitor
-    from .environment import IntersectionEnv
+    from .multi_environment import make_env, validate_model
 
     torch.set_num_threads(2)
     run = output_dir(args.out, "train")
@@ -62,7 +62,7 @@ def train(args, config):
     if steps <= settings["learning_starts"]:
         raise ValueError("Training steps must exceed learning_starts so gradient updates actually occur.")
     scenario = args.scenario or settings["scenario"]
-    raw = IntersectionEnv(config, scenario, seed, vary_demand=True)
+    raw = make_env(config, scenario, seed, vary_demand=True)
     env = Monitor(raw, str(run / "monitor.csv"))
     params = {key: settings[key] for key in ("learning_rate", "buffer_size", "learning_starts", "batch_size", "gamma", "train_freq", "target_update_interval", "exploration_fraction", "exploration_final_eps", "device")}
     try:
@@ -77,14 +77,14 @@ def train(args, config):
         prediction, _ = restored.predict(raw.observation_space.sample(), deterministic=True)
         if not changed or not raw.action_space.contains(int(prediction)):
             raise RuntimeError("Training/save/reload verification failed.")
-        save_json(run / "run.json", {"kind": "training", "config": config, "scenario": scenario, "training_seed": seed, "first_demand_seed": 100000 + seed * 1000, "requested_steps": steps, "actual_steps": model.num_timesteps, "gradient_updates": model._n_updates, "weights_changed": changed, "save_reload_passed": True, "model_sha256": hashlib.sha256((run / "model.zip").read_bytes()).hexdigest(), "packages": versions(), "note": "A short training run validates the pipeline; it does not establish policy quality."})
+        save_json(run / "run.json", {"kind": "training", "episodes": getattr(raw, "episodes", []), "config": config, "scenario": scenario, "training_seed": seed, "first_demand_seed": 100000 + seed * 1000, "requested_steps": steps, "actual_steps": model.num_timesteps, "gradient_updates": model._n_updates, "weights_changed": changed, "save_reload_passed": True, "model_sha256": hashlib.sha256((run / "model.zip").read_bytes()).hexdigest(), "packages": versions(), "note": "A short training run validates the pipeline; it does not establish policy quality."})
     finally:
         env.close()
     print(f"Training saved: {run}", flush=True)
 
 
 def evaluate(args, config):
-    from .environment import IntersectionEnv
+    from .multi_environment import make_env, validate_model
     from .metrics import episode_metrics, write_csv
     from .scenario import routes
 
@@ -109,15 +109,16 @@ def evaluate(args, config):
             for policy in policies:
                 case = run / f"{scenario}_{seed}_{policy}"
                 tripinfo = case / "tripinfo.xml"
-                env = IntersectionEnv(config, scenario, seed, gui=args.gui, gui_delay=args.gui_delay, tripinfo=tripinfo)
+                env = make_env(config, scenario, seed, gui=args.gui, gui_delay=args.gui_delay, tripinfo=tripinfo)
                 trace = []
                 try:
+                    validate_model(model, env)
                     obs, _ = env.reset(seed=seed)
                     done = False
                     while not done:
                         action = int(model.predict(obs, deterministic=True)[0]) if policy == "dqn" else env.baseline_action(policy)
                         obs, reward, terminated, truncated, info = env.step(action)
-                        trace.append({key: info[key] for key in ("step", "requested_action", "selected_action", "phase", "green_age", "switched", "forced_switch", "queue_total", "queue_N", "queue_S", "queue_E", "queue_W")} | {"reward": reward})
+                        trace.append(info | {"reward": reward})
                         done = terminated or truncated
                     if args.gui and not args.no_gui_pause:
                         print("Simulation complete. Window remains open. Press Enter in this terminal to close it and save results.", flush=True)
@@ -128,7 +129,7 @@ def evaluate(args, config):
                 finally:
                     env.close()  # Flush unfinished trip records before parsing.
                 metrics = episode_metrics(tripinfo, route_file, config["simulation"]["duration_seconds"], trace)
-                row = {"scenario": scenario, "seed": seed, "policy": policy, **metrics}
+                row = {"layout": config.get("layout", "intersection"), "scenario": scenario, "seed": seed, "policy": policy, **metrics}
                 summary.append(row)
                 write_csv(case / "trace.csv", trace)
                 save_json(case / "metrics.json", row)
@@ -154,17 +155,17 @@ def main():
     show = sub.add_parser("show", help="Build and open the polished offline traffic presentation")
     show.add_argument("--seconds", type=int, default=300)
     show.add_argument("--seed", type=int, default=101)
-    show.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal"], default=["balanced", "peak", "tidal"])
+    show.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal", "surge"], default=["balanced", "peak", "tidal"])
     show.add_argument("--model", help="Optional DQN model to include in the strategy switcher")
     show.add_argument("--out", help="New output directory under the project")
     show.add_argument("--no-open", action="store_true", help="Export without opening a browser")
     training = sub.add_parser("train", help="Train and verify DQN")
     training.add_argument("--steps", type=int)
     training.add_argument("--seed", type=int)
-    training.add_argument("--scenario", choices=["balanced", "peak", "tidal"])
+    training.add_argument("--scenario", choices=["balanced", "peak", "tidal", "surge", "mixed"])
     evaluation = sub.add_parser("evaluate", help="Evaluate policies on identical traffic")
-    evaluation.add_argument("--policies", nargs="+", choices=["fixed", "queue", "dqn"], default=["fixed", "queue"])
-    evaluation.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal"])
+    evaluation.add_argument("--policies", nargs="+", choices=["fixed", "queue", "dqn", "yield"], default=["fixed", "queue"])
+    evaluation.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal", "surge"])
     evaluation.add_argument("--seeds", nargs="+", type=int)
     evaluation.add_argument("--model")
     evaluation.add_argument("--gui", action="store_true", help="Open SUMO GUI for each episode")
@@ -174,10 +175,22 @@ def main():
         item.add_argument("--seconds", type=int, help="Override episode length in simulated seconds")
     for item in (training, evaluation):
         item.add_argument("--out", help="New output directory under the project; omit for timestamped directory")
+    for item in (build, show, training, evaluation):
+        item.add_argument("--layout", choices=["intersection", "crossroads", "tjunction", "roundabout"] + (["mixed"] if item is training else []), help="Road topology; mixed randomizes topology each training episode")
     args = parser.parse_args()
     if getattr(args, "gui_delay", 0) < 0:
         parser.error("--gui-delay must be nonnegative")
     config = read_config(args.config)
+    if getattr(args, "layout", None):
+        config["layout"] = args.layout
+    layout = config.get("layout", "intersection")
+    if layout == "mixed" and args.command != "train":
+        parser.error("Select a concrete --layout for evaluation, export or build")
+    requested_scenarios = ([args.scenario or config["training"]["scenario"]] if args.command == "train" else getattr(args, "scenarios", None) or config["evaluation"]["scenarios"])
+    if layout == "intersection" and any(s in ("mixed", "surge") for s in requested_scenarios):
+        parser.error("surge/mixed demand requires --layout crossroads, tjunction, roundabout or mixed")
+    if "yield" in getattr(args, "policies", []) and layout != "roundabout":
+        parser.error("--policies yield requires --layout roundabout")
     if getattr(args, "seconds", None) is not None:
         if args.seconds <= 0 or args.seconds % config["simulation"]["delta_time"]:
             parser.error("--seconds must be positive and divisible by delta_time")

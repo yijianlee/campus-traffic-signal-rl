@@ -1,6 +1,6 @@
 # Campus Traffic Signal RL
 
-A reproducible reinforcement learning project for traffic signal control at a single campus-area intersection.
+A reproducible reinforcement learning project for traffic signal control across campus-area intersections, T-junctions and metered roundabouts.
 
 Repository: `campus-traffic-signal-rl`
 
@@ -11,6 +11,28 @@ Repository: `campus-traffic-signal-rl`
 当前已经配置本地 Python 环境、SUMO 路口仿真、固定配时与排队优先基线、DQN 训练和统一评估流程。当前路口与车流均为人工构造，尚未采集或校准真实路口数据。
 
 本次安装、验证与交付记录见 [初步配置说明](docs/initial_setup.md)。运行结果保存在本地 `outputs/`；该目录不上传 GitHub，在新电脑上运行评估命令即可生成报告。
+
+## 多道路结构与混合训练
+
+现已支持带左转/直行/右转的十字路口 `crossroads`、丁字路口 `tjunction`、入口受控环岛 `roundabout`，以及原有直行十字路口 `intersection`。新结构可共用一个模型；`mixed` 训练每回合随机选择新道路，配合四类车流训练。
+
+```powershell
+# 环岛演示：自动比较固定配时、排队优先和无信号自然让行
+.\.venv\Scripts\python.exe -m traffic_rl show --layout roundabout --scenarios balanced surge --seconds 300
+
+# 三种新道路 × 四种车流的混合训练
+.\.venv\Scripts\python.exe -m traffic_rl train --layout mixed --scenario mixed --steps 30000 --out outputs/diverse_dqn
+
+# 同一个模型分别测试不同道路；可替换为 crossroads 或 tjunction
+.\.venv\Scripts\python.exe -m traffic_rl evaluate --layout roundabout --policies fixed queue yield dqn --model outputs/diverse_dqn/model.zip --scenarios balanced peak tidal surge --seeds 101 102 103
+
+# 将训练得到的模型加入环岛回放
+.\.venv\Scripts\python.exe -m traffic_rl show --layout roundabout --model outputs/diverse_dqn/model.zip
+```
+
+`--out` 必须使用新的目录名，防止覆盖已有实验。原有 13 维状态、2 动作模型不能用于新道路；新道路采用 22 维状态、4 动作，需要重新训练。默认命令仍使用旧路口，便于复现实验。`surge` 在回合中间三分之一将到达率提高至 2.5 倍，最后三分之一降至 0.6 倍。
+
+环岛采用单车道逆时针通行、环内优先；信号灯位于入口上游，控制进入环岛的流量。`yield` 基线持续开放入口，仅按自然让行规则运行。**入口控制可能增加等待，并不预设它优于自然让行。** 详细状态、约束和实验设计见 [道路多样性说明](docs/road_diversity.md)。
 
 ## 先运行起来
 
@@ -108,9 +130,9 @@ Repository: `campus-traffic-signal-rl`
 
 ## 实验边界
 
-首版只有一个十字路口、每方向一条进口车道、机动车直行和南北/东西两组相位；尚无转弯、行人、非机动车或全红阶段。最小绿灯 10 秒、黄灯 3 秒、最大绿灯 60 秒只是课程仿真参数，不是实地交通工程配时结论。
+原有 `intersection` 模式只有直行和南北/东西两组相位。新增三种道路含转弯，新信号控制采用逐进口放行、黄灯与全红清空。所有道路均为单车道，尚无行人和非机动车。最小绿灯 10 秒、黄灯 3 秒、最大绿灯 60 秒只是课程仿真参数，不是实地交通工程配时结论。
 
-每 5 秒决策一次，因此信号时长在决策网格上取整：固定策略首段绿灯 30 秒，之后约 32 秒；最大绿灯保护会提前到下一个决策点执行，不超过 60 秒。两种基线和 DQN 共用相同的执行约束。
+原有 `intersection` 每 5 秒决策一次，因此信号时长在决策网格上取整：固定策略首段绿灯 30 秒，之后约 32 秒；最大绿灯保护会提前到下一个决策点执行，不超过 60 秒。两种基线和 DQN 共用相同的执行约束。
 
 测试：
 

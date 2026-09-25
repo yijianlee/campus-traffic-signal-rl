@@ -21,6 +21,9 @@ def write_xml(path: Path, root: ET.Element) -> None:
 
 
 def network(config: dict) -> Path:
+    if config.get("layout", "intersection") != "intersection":
+        from .roadnet import network as road_network
+        return road_network(config)
     sim = config["simulation"]
     signature = hashlib.sha256(json.dumps({"length": sim["road_length_m"], "speed": sim["speed_limit_mps"], "version": 2}, sort_keys=True).encode()).hexdigest()[:12]
     folder = ROOT / "data/generated" / f"network_{signature}"
@@ -66,6 +69,11 @@ def network(config: dict) -> Path:
 
 
 def routes(config: dict, scenario: str, seed: int) -> tuple[Path, int]:
+    if config.get("layout", "intersection") != "intersection":
+        from .roadnet import routes as turning_routes
+        return turning_routes(config, scenario, seed)
+    if scenario in ("surge", "mixed"):
+        raise ValueError("surge/mixed demand requires a new road layout.")
     rates = config["demand_vehicles_per_hour_per_approach"][scenario]
     duration = config["simulation"]["duration_seconds"]
     signature = hashlib.sha256(json.dumps({"rates": rates, "duration": duration, "seed": seed, "version": 1}, sort_keys=True).encode()).hexdigest()[:12]

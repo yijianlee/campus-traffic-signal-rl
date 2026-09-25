@@ -13,7 +13,7 @@ from .runtime import ROOT, save_json
 
 def present(args, config):
     from .__main__ import output_dir, versions
-    from .environment import IntersectionEnv
+    from .multi_environment import make_env, validate_model
     from .metrics import episode_metrics
     from .scenario import network, routes
 
@@ -34,30 +34,48 @@ def present(args, config):
     duration = config["simulation"]["duration_seconds"]
     net = ET.parse(network(config)).getroot()
     bounds = [float(x) for x in net.find("location").get("convBoundary").split(",")]
-    center = [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
+    junction = net.find("junction[@id='J']")
+    center = [float(junction.get("x")), float(junction.get("y"))] if junction is not None else [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
     controlled = {link.get("from")[0]: int(link.get("linkIndex")) for link in net.findall("connection") if link.get("tl") == "J"}
     data = {"version": 1, "duration": duration, "sampleInterval": 0.2, "seed": args.seed, "center": center, "source": "SUMO simulation / synthetic demand", "modelNote": model_note, "runs": []}
+    layout = config.get("layout", "intersection")
+    data["layout"] = layout
+    if layout != "intersection":
+        def points(shape):
+            return [[float(n) for n in pair.split(",")] for pair in shape.split()]
+        data["geometry"] = {
+            "lanes": [{"id": lane.get("id"), "shape": points(lane.get("shape")), "width": float(lane.get("width", "3.2"))} for lane in net.findall("edge/lane")],
+            "junctions": [points(j.get("shape")) for j in net.findall("junction") if j.get("shape")],
+            "signals": [{"direction": lane.get("id")[0], "position": points(lane.get("shape"))[-1]} for lane in net.findall("edge/lane") if lane.get("id").endswith("_in_0")],
+        }
     for scenario in args.scenarios:
-        for policy in (["fixed", "queue", "dqn"] if model else ["fixed", "queue"]):
+        for policy in ["fixed", "queue"] + (["yield"] if layout == "roundabout" else []) + (["dqn"] if model else []):
             case = run / f"{scenario}_{policy}"
             case.mkdir()
             fcd = case / "vehicles.xml"
             tripinfo = case / "tripinfo.xml"
             route_file, planned = routes(config, scenario, args.seed)
-            env = IntersectionEnv(config, scenario, args.seed, tripinfo=tripinfo)
-            env.env.additional_sumo_cmd += f" --fcd-output {fcd.relative_to(ROOT).as_posix()} --device.fcd.period 0.2"
+            env = make_env(config, scenario, args.seed, tripinfo=tripinfo)
+            validate_model(model, env)
+            core = env.unwrapped
+            core.additional_sumo_cmd += f" --fcd-output {fcd.relative_to(ROOT).as_posix()} --device.fcd.period 0.2"
             signals = []
             trace = []
             try:
                 obs, _ = env.reset(seed=args.seed)
-                original_step = env.env._sumo_step
+                original_step = core._sumo_step
+
+                def light_state():
+                    if layout != "intersection":
+                        return core.light_state()
+                    state = core.sumo.trafficlight.getRedYellowGreenState("J")
+                    return "".join(state[controlled[d]] for d in "NSEW")
 
                 def record_signal():
-                    state = env.env.sumo.trafficlight.getRedYellowGreenState("J")
-                    signals.append([int(env.env.sim_step), "".join(state[controlled[d]] for d in "NSEW")])
+                    signals.append([int(core.sim_step), light_state()])
                     original_step()
 
-                env.env._sumo_step = record_signal
+                core._sumo_step = record_signal
                 done = False
                 while not done:
                     action = int(model.predict(obs, deterministic=True)[0]) if policy == "dqn" else env.baseline_action(policy)
@@ -65,12 +83,11 @@ def present(args, config):
                     trace.append(info)
                     done = terminated or truncated
                 terminal = []
-                for vid in env.env.sumo.vehicle.getIDList():
-                    x, y = env.env.sumo.vehicle.getPosition(vid)
-                    terminal.append([vid, x, y, env.env.sumo.vehicle.getAngle(vid), env.env.sumo.vehicle.getSpeed(vid)])
+                for vid in core.sumo.vehicle.getIDList():
+                    x, y = core.sumo.vehicle.getPosition(vid)
+                    terminal.append([vid, x, y, core.sumo.vehicle.getAngle(vid), core.sumo.vehicle.getSpeed(vid)])
                 terminal_queue = list(env.queues().values())
-                terminal_state = env.env.sumo.trafficlight.getRedYellowGreenState("J")
-                terminal_light = "".join(terminal_state[controlled[d]] for d in "NSEW")
+                terminal_light = light_state()
             finally:
                 env.close()
             ids = {}
@@ -113,7 +130,7 @@ def present(args, config):
     for name in ("index.html", "style.css", "app.js"):
         shutil.copyfile(assets / name, run / name)
     (run / "recordings.js").write_text("window.TRAFFIC_REPLAY=" + json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + ";", encoding="utf-8")
-    save_json(run / "manifest.json", {"config": config, "seed": args.seed, "packages": versions(), "model": str(Path(args.model).resolve()) if args.model else None, "model_sha256": hashlib.sha256(Path(args.model).read_bytes()).hexdigest() if args.model else None, "note": "Recorded SUMO replay. Visual interpolation is only for display; indicators come from recorded samples. Landscape is illustrative; pedestrians and turning movements are not simulated."})
+    save_json(run / "manifest.json", {"config": config, "seed": args.seed, "packages": versions(), "model": str(Path(args.model).resolve()) if args.model else None, "model_sha256": hashlib.sha256(Path(args.model).read_bytes()).hexdigest() if args.model else None, "note": "Recorded SUMO replay. Visual interpolation is only for display; indicators come from recorded samples. Landscape is illustrative; pedestrians are not simulated. Turning movements are included in the new layouts."})
     print(f"Presentation ready: {run / 'index.html'}", flush=True)
     if not args.no_open:
         webbrowser.open((run / "index.html").as_uri())

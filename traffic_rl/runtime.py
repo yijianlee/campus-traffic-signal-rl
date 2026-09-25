@@ -34,11 +34,15 @@ def binary(name: str) -> str:
 def read_config(path: str | Path | None = None) -> dict:
     path = Path(path) if path else ROOT / "configs/default.json"
     config = json.loads(path.read_text(encoding="utf-8"))
+    if config.get("layout", "intersection") not in ("intersection", "crossroads", "tjunction", "roundabout", "mixed"):
+        raise ValueError("Unknown road layout in configuration.")
     sim = config["simulation"]
     step_length = sim.setdefault("step_length", 0.1)
     if not 0 < step_length <= 1 or not math.isclose(1 / step_length, round(1 / step_length)):
         raise ValueError("step_length must evenly divide one second (for example 0.1, 0.2, 0.5, 1).")
     delta = sim["delta_time"]
+    if int(delta) != delta or int(sim["yellow_time"]) != sim["yellow_time"]:
+        raise ValueError("delta_time and yellow_time must be whole simulation seconds.")
     if delta <= 0 or not 0 < sim["yellow_time"] < delta:
         raise ValueError("SUMO-RL requires 0 < yellow_time < delta_time.")
     for key in ("duration_seconds", "min_green", "max_green", "fixed_green"):

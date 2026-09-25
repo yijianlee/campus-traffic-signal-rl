@@ -47,4 +47,7 @@ def episode_metrics(tripinfo: Path, route_file: Path, duration: int, trace: list
     }
     for direction in "NSEW":
         result[f"mean_wait_plus_entry_delay_{direction}_s"] = mean([cost for vid, cost in costs.items() if vid.startswith(direction + "_")])
+    if trace and "collisions" in trace[-1]:
+        result["collision_vehicle_events"] = trace[-1]["collisions"]
+        result["teleport_events"] = trace[-1]["teleports"]
     return result

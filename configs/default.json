@@ -1,5 +1,6 @@
 {
   "project": "campus-traffic-signal-rl",
+  "layout": "intersection",
   "data_source": "synthetic_not_field_calibrated",
   "simulation": {
     "duration_seconds": 1800,
@@ -15,7 +16,8 @@
   "demand_vehicles_per_hour_per_approach": {
     "balanced": {"N": 300, "S": 300, "E": 300, "W": 300},
     "peak": {"N": 600, "S": 600, "E": 600, "W": 600},
-    "tidal": {"N": 600, "S": 450, "E": 150, "W": 150}
+    "tidal": {"N": 600, "S": 450, "E": 150, "W": 150},
+    "surge": {"N": 300, "S": 300, "E": 300, "W": 300}
   },
   "reward": {"queue_weight": 1.0, "imbalance_weight": 0.0, "switch_weight": 0.0},
   "training": {
