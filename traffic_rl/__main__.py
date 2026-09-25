@@ -155,6 +155,7 @@ def main():
     show = sub.add_parser("show", help="Build and open the polished offline traffic presentation")
     show.add_argument("--seconds", type=int, default=300)
     show.add_argument("--seed", type=int, default=101)
+    show.add_argument("--layouts", nargs="+", choices=["intersection", "crossroads", "tjunction", "roundabout"], help="Bundle several road layouts into one learning viewer")
     show.add_argument("--scenarios", nargs="+", choices=["balanced", "peak", "tidal", "surge"], default=["balanced", "peak", "tidal"])
     show.add_argument("--model", help="Optional DQN model to include in the strategy switcher")
     show.add_argument("--out", help="New output directory under the project")
@@ -184,10 +185,12 @@ def main():
     if getattr(args, "layout", None):
         config["layout"] = args.layout
     layout = config.get("layout", "intersection")
+    if getattr(args, "layouts", None) and getattr(args, "layout", None):
+        parser.error("Use either --layout or --layouts, not both")
     if layout == "mixed" and args.command != "train":
         parser.error("Select a concrete --layout for evaluation, export or build")
     requested_scenarios = ([args.scenario or config["training"]["scenario"]] if args.command == "train" else getattr(args, "scenarios", None) or config["evaluation"]["scenarios"])
-    if layout == "intersection" and any(s in ("mixed", "surge") for s in requested_scenarios):
+    if layout == "intersection" and not getattr(args, "layouts", None) and any(s in ("mixed", "surge") for s in requested_scenarios):
         parser.error("surge/mixed demand requires --layout crossroads, tjunction, roundabout or mixed")
     if "yield" in getattr(args, "policies", []) and layout != "roundabout":
         parser.error("--policies yield requires --layout roundabout")

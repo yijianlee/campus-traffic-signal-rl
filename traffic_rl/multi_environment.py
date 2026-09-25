@@ -117,6 +117,8 @@ class RoadEnv(gym.Env):
         sim = self.config["simulation"]
         requested = int(action)
         invalid = DIRECTIONS[requested] not in self.active
+        previous = self.phase
+        min_blocked = self.green_age < sim["min_green"]
         selected = self.phase if invalid or self.green_age < sim["min_green"] else requested
         forced = not self.unmetered and self.green_age + sim["delta_time"] > sim["max_green"]
         if forced:
@@ -141,6 +143,9 @@ class RoadEnv(gym.Env):
         stopped = sum(self.sumo.vehicle.getSpeed(v) < .1 for v in self.sumo.vehicle.getIDList())
         reward = -float(stopped) * self.config["reward"]["queue_weight"] - float(invalid) - float(switched) * self.config["reward"]["switch_weight"]
         info = {"step": self.sim_step, "requested_action": requested, "selected_action": self.phase, "phase": self.phase, "green_age": self.green_age, "switched": int(switched), "forced_switch": int(forced), "queue_total": sum(q.values()), "collisions": self.collisions, "teleports": self.teleports, **{f"queue_{d}": v for d, v in q.items()}}
+        info["action_reason"] = "unmetered" if self.unmetered else "max_green" if forced else "invalid" if invalid else "min_green" if min_blocked and requested != previous else "switch" if switched else "hold"
+        info["reward_terms"] = {"stopped": -float(stopped) * self.config["reward"]["queue_weight"], "imbalance": 0.0, "switch": -float(switched) * self.config["reward"]["switch_weight"], "invalid": -float(invalid)}
+        info["reward_inputs"] = {"stopped": stopped, "imbalance": 0, "switch": int(switched), "invalid": int(invalid)}
         return self._observation(), reward, False, self.sim_step >= sim["duration_seconds"], info
 
     def baseline_action(self, policy):

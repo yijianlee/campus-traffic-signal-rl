@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import shutil
 import webbrowser
@@ -11,7 +12,7 @@ from pathlib import Path
 from .runtime import ROOT, save_json
 
 
-def present(args, config):
+def _present_layout(args, config):
     from .__main__ import output_dir, versions
     from .multi_environment import make_env, validate_model
     from .metrics import episode_metrics
@@ -40,14 +41,13 @@ def present(args, config):
     data = {"version": 1, "duration": duration, "sampleInterval": 0.2, "seed": args.seed, "center": center, "source": "SUMO simulation / synthetic demand", "modelNote": model_note, "runs": []}
     layout = config.get("layout", "intersection")
     data["layout"] = layout
-    if layout != "intersection":
-        def points(shape):
-            return [[float(n) for n in pair.split(",")] for pair in shape.split()]
-        data["geometry"] = {
-            "lanes": [{"id": lane.get("id"), "shape": points(lane.get("shape")), "width": float(lane.get("width", "3.2"))} for lane in net.findall("edge/lane")],
-            "junctions": [points(j.get("shape")) for j in net.findall("junction") if j.get("shape")],
-            "signals": [{"direction": lane.get("id")[0], "position": points(lane.get("shape"))[-1]} for lane in net.findall("edge/lane") if lane.get("id").endswith("_in_0")],
-        }
+    def points(shape):
+        return [[float(n) for n in pair.split(",")] for pair in shape.split()]
+    data["geometry"] = {
+        "lanes": [{"id": lane.get("id"), "shape": points(lane.get("shape")), "width": float(lane.get("width", "3.2"))} for lane in net.findall("edge/lane")],
+        "junctions": [points(j.get("shape")) for j in net.findall("junction") if j.get("shape")],
+        "signals": [{"direction": lane.get("id")[0], "position": points(lane.get("shape"))[-1]} for lane in net.findall("edge/lane") if lane.get("id").endswith("_in_0")],
+    }
     for scenario in args.scenarios:
         for policy in ["fixed", "queue"] + (["yield"] if layout == "roundabout" else []) + (["dqn"] if model else []):
             case = run / f"{scenario}_{policy}"
@@ -61,6 +61,7 @@ def present(args, config):
             core.additional_sumo_cmd += f" --fcd-output {fcd.relative_to(ROOT).as_posix()} --device.fcd.period 0.2"
             signals = []
             trace = []
+            decisions = []
             try:
                 obs, _ = env.reset(seed=args.seed)
                 original_step = core._sumo_step
@@ -76,10 +77,24 @@ def present(args, config):
                     original_step()
 
                 core._sumo_step = record_signal
+                if layout == "intersection":
+                    lanes = list(env.signal.lanes)
+                    observation_labels = ["南北相位", "东西相位", "满足最小相位时长"] + [f"{lane} 密度" for lane in lanes] + [f"{lane} 排队比例" for lane in lanes] + ["绿灯年龄比例", "回合进度"]
+                else:
+                    observation_labels = [f"{d} 进口存在" for d in "NSEW"] + [f"{d} 排队比例" for d in "NSEW"] + [f"{d} 密度" for d in "NSEW"] + [f"{d} 放行相位" for d in "NSEW"] + ["绿灯年龄比例", "回合进度", "环内密度", "十字路口", "丁字路口", "环岛"]
+
+                def snapshot():
+                    return {"queue": env.queues(), "greenAge": float(env.green_age), "light": light_state(), "density": {d: round(core.sumo.lane.getLastStepVehicleNumber(f"{d}_in_0") / max(1, core.sumo.lane.getLength(f"{d}_in_0") / 7.5), 4) if f"{d}_in_0" in lane_ids else None for d in "NSEW"}}
+
+                lane_ids = set(core.sumo.lane.getIDList())
                 done = False
                 while not done:
+                    before = snapshot()
+                    previous_obs = obs.copy()
+                    start = float(core.sim_step)
                     action = int(model.predict(obs, deterministic=True)[0]) if policy == "dqn" else env.baseline_action(policy)
-                    obs, _, terminated, truncated, info = env.step(action)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    decisions.append({"index": len(decisions) + 1, "start": start, "end": float(core.sim_step), "state": before, "nextState": snapshot(), "observation": previous_obs.tolist(), "nextObservation": obs.tolist(), "requested": action, "executed": int(info["phase"]), "reason": info["action_reason"], "reward": float(reward), "rewardTerms": info["reward_terms"], "rewardInputs": info["reward_inputs"]})
                     trace.append(info)
                     done = terminated or truncated
                 terminal = []
@@ -124,13 +139,62 @@ def present(args, config):
                 end_vehicles.append([ids[vid], *vehicle[1:]])
             frames.append({"t": duration, "v": end_vehicles, "q": terminal_queue, "light": terminal_light, "completed": metrics["completed_vehicles"], "speed": round(sum(v[4] for v in end_vehicles) / len(end_vehicles) * 3.6, 1) if end_vehicles else None})
             data["runs"].append({"scenario": scenario, "policy": policy, "planned": planned, "frames": frames, "metrics": metrics, "demandHash": hashlib.sha256(route_file.read_bytes()).hexdigest()})
+            data["runs"][-1].update({"layout": layout, "decisions": decisions, "observationLabels": observation_labels, "vehicleIds": list(ids), "rewardScope": "进口停车车辆" if layout == "intersection" else "全路网停车车辆"})
+            save_json(case / "decisions.json", decisions)
             save_json(case / "metrics.json", metrics)
             print(f"Recorded {scenario}/{policy}: {len(frames)} frames, {len(ids)} vehicles", flush=True)
     assets = Path(__file__).parent / "web"
-    for name in ("index.html", "style.css", "app.js"):
+    data.update({"version": 2, "simulation": config["simulation"], "rewardWeights": config["reward"], "layouts": [{"id": layout, "center": center, "geometry": data["geometry"]}]})
+    for name in ("index.html", "style.css", "app.js", "renderer.js"):
         shutil.copyfile(assets / name, run / name)
     (run / "recordings.js").write_text("window.TRAFFIC_REPLAY=" + json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + ";", encoding="utf-8")
     save_json(run / "manifest.json", {"config": config, "seed": args.seed, "packages": versions(), "model": str(Path(args.model).resolve()) if args.model else None, "model_sha256": hashlib.sha256(Path(args.model).read_bytes()).hexdigest() if args.model else None, "note": "Recorded SUMO replay. Visual interpolation is only for display; indicators come from recorded samples. Landscape is illustrative; pedestrians are not simulated. Turning movements are included in the new layouts."})
     print(f"Presentation ready: {run / 'index.html'}", flush=True)
     if not args.no_open:
         webbrowser.open((run / "index.html").as_uri())
+    return data, run
+
+
+def present(args, config):
+    """One portable package can contain multiple independently recorded layouts."""
+    from .__main__ import output_dir
+    layouts = list(dict.fromkeys(getattr(args, "layouts", None) or []))
+    if not layouts:
+        return _present_layout(args, config)
+    root = output_dir(args.out, "learning_lab")
+    bundle = None
+    packages = []
+    model_shape = None
+    if args.model:
+        from stable_baselines3 import DQN
+        model_shape = DQN.load(args.model, device="cpu").observation_space.shape
+    for layout in layouts:
+        child_args, child_config = copy.copy(args), copy.deepcopy(config)
+        child_args.out = (root / layout).relative_to(ROOT).as_posix()
+        child_args.no_open = True
+        child_config["layout"] = layout
+        if layout == "intersection" and "surge" in child_args.scenarios:
+            child_args.scenarios = [s for s in child_args.scenarios if s != "surge"]
+        if not child_args.scenarios:
+            continue
+        if model_shape is not None and model_shape != ((13,) if layout == "intersection" else (22,)):
+            child_args.model = None
+        data, path = _present_layout(child_args, child_config)
+        packages.append({"layout": layout, "manifest": f"{layout}/manifest.json", "modelIncluded": bool(child_args.model)})
+        if bundle is None:
+            bundle = copy.copy(data)
+            bundle["layouts"], bundle["runs"] = [], []
+        bundle["layouts"].extend(data["layouts"])
+        for recording in data["runs"]:
+            recording["modelNote"] = data["modelNote"]
+        bundle["runs"].extend(data["runs"])
+    if bundle is None:
+        raise ValueError("No compatible layout/scenario combinations to export.")
+    for name in ("index.html", "style.css", "app.js", "renderer.js"):
+        shutil.copyfile(Path(__file__).parent / "web" / name, root / name)
+    (root / "recordings.js").write_text("window.TRAFFIC_REPLAY=" + json.dumps(bundle, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + ";", encoding="utf-8")
+    save_json(root / "manifest.json", {"version": 2, "seed": args.seed, "packages": packages, "note": "Offline evaluation replay. Model weights do not update during playback."})
+    print(f"Presentation ready: {root / 'index.html'}", flush=True)
+    if not args.no_open:
+        webbrowser.open((root / "index.html").as_uri())
+    return bundle, root

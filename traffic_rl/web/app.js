@@ -1,161 +1,101 @@
 (() => {
   'use strict';
-  const data = window.TRAFFIC_REPLAY;
-  const $ = id => document.getElementById(id);
-  if (!data?.runs?.length) { $('error').hidden = false; $('error').textContent = '未找到仿真记录。请重新运行 show 命令，并将页面与 recordings.js 保存在同一目录。'; return; }
-  const titles = {fixed:'固定配时', queue:'排队优先', dqn:'DQN 智能策略', yield:'自然让行（无入口控制）'};
-  const scenarios = {balanced:'均衡车流', peak:'高峰车流', tidal:'潮汐车流', surge:'突发车流'};
-  const notes = {yield:'入口持续开放，驶入车辆向环内车辆让行。用于检验入口控制是否有收益。', fixed:'按预设时长轮流放行。观察稳定节奏如何应对不同方向的车流。', queue:'优先服务排队较多的方向，同时遵守最短、最长绿灯限制。', dqn:'根据路口状态选择动作。' + (data.modelNote || '策略效果需通过独立实验评估。')};
-  const layoutNames = {intersection:'直行十字路口',crossroads:'转弯十字路口',tjunction:'丁字路口',roundabout:'入口受控环岛'};
-  document.querySelector('.map-head b').textContent = layoutNames[data.layout || 'intersection'];
-  document.querySelector('.map-head .subtle').textContent = data.geometry ? ' / SUMO 实际路网' : ' / 直行场景';
-  $('scenarios').replaceChildren(...[...new Set(data.runs.map(r=>r.scenario))].map((name,i)=>{const b=document.createElement('button');b.dataset.scenario=name;b.textContent=scenarios[name];b.classList.toggle('active',i===0);return b;}));
-  document.querySelectorAll('.signal-row').forEach(el=>el.remove());
-  for(const [i,d] of ['北','南','东','西'].entries()){const row=document.createElement('div');row.className='signal-row';row.innerHTML=`<span>${d}进口</span><div class="traffic-light" id="signal-${i}"><i data-color="r"></i><i data-color="y"></i><i data-color="g"></i></div><b id="signal-${i}-label"></b>`;document.querySelector('.signal-panel').append(row);}
-  const policies = [...new Set(data.runs.map(r => r.policy))];
-  $('policy').replaceChildren(...policies.map(p => { const o = document.createElement('option'); o.value = p; o.textContent = titles[p]; return o; }));
-  document.querySelectorAll('[data-scenario]').forEach(b => { b.disabled = !data.runs.some(r => r.scenario === b.dataset.scenario); });
-  $('seed').textContent = `同一到达记录 · SEED ${data.seed}`;
-  const canvas = $('map'), ctx = canvas.getContext('2d');
-  let run = data.runs[0], t = 0, playing = false, speed = 3, radius = 95, last = null;
-  let w = 0, h = 0, scale = 1, frameIndex = 0, lastUI = -1;
-  const clock = value => `${Math.floor(value/60).toString().padStart(2,'0')}:${Math.floor(value%60).toString().padStart(2,'0')}`;
-  $('timeline').max = data.duration; $('duration').textContent = clock(data.duration);
-  for (const [i, label] of ['北进口','南进口','东进口','西进口'].entries()) {
-    const row = document.createElement('div'); row.className = 'q-row';
-    row.innerHTML = `<span>${label}</span><div class="bar"><div class="fill" id="bar-${i}"></div></div><b id="q-${i}">0</b>`;
-    $('direction-queues').append(row);
+  const data=window.TRAFFIC_REPLAY, $=id=>document.getElementById(id);
+  if(!data?.runs?.length||!data.layouts?.length){$('error').hidden=false;$('error').textContent='这份记录缺少学习数据。请使用新版 show 命令重新导出，保留完整文件夹。';return;}
+  const layoutNames={intersection:'直行十字路口',crossroads:'转弯十字路口',tjunction:'丁字路口',roundabout:'入口受控环岛'};
+  const scenarioNames={balanced:'均衡车流',peak:'高峰车流',tidal:'潮汐车流',surge:'突发车流'};
+  const policyNames={fixed:'固定配时',queue:'排队优先',yield:'自然让行',dqn:'DQN 策略'};
+  const notes={fixed:'按预设时长轮流放行，遵守信号时长约束。',queue:'优先服务排队较多的方向，仍受最小、最大绿灯约束。',yield:'入口持续开放，驶入车辆向环内车辆让行。',dqn:'加载已有模型进行确定性评估，回放期间不更新参数。'};
+  const reasons={hold:'保持当前放行方向。',switch:'执行方向切换，并经过信号过渡。',min_green:'最小绿灯尚未满足，请求切换被暂缓，保持原方向。',max_green:'最长绿灯保护触发，控制器强制切换方向。',invalid:'请求的进口不存在，保持原方向并计入无效动作惩罚。',unmetered:'入口全部开放，信号不限制进入；环岛合流处仍按环内优先让行。'};
+  const concepts={state:['状态 sₜ','智能体在决策时看到的数值。这里包括排队、密度、放行相位等。中文表格帮助理解路况，展开向量可查看实际输入模型的归一化数值。'],action:['动作 aₜ','策略希望放行的方向。旧路口有南北/东西两种动作，新道路有北/南/东/西四种。控制器还会检查最小绿灯、最长绿灯和进口是否存在，因此请求不一定原样执行。'],reward:['奖励 rₜ','执行动作后，环境计算的反馈分数。本例以停车车辆数的负值为主，加上配置的惩罚项。DQN 训练旨在提高累积折扣回报，而不是只追求某一步的最高分。'],episode:['回合 Episode','一次从仿真开始到设定时长结束的完整运行，包含多次决策。训练会经历多个回合并更新参数；此页面只回放已记录的评估回合。']};
+  let run=data.runs[0],scene=data.layouts.find(s=>s.id===run.layout),t=0,playing=false,learning=false,speed=1,last=null,lastFrame=-1,lastDecision=-2;
+  let fpsStart=null,fpsFrames=0,noticeTimer=null;
+  const renderer=new window.TrafficRenderer($('map'));
+  const clock=s=>`${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;
+  const fmt=v=>Number(v).toFixed(2).replace(/\.00$/,'');
+  const direction=d=>({N:'北',S:'南',E:'东',W:'西'}[d]);
+  const actionName=a=>run.layout==='intersection'?['南北放行','东西放行'][a]:['北进口放行','南进口放行','东进口放行','西进口放行'][a];
+  function options(select,values,names,preferred){select.replaceChildren(...values.map(v=>{const o=document.createElement('option');o.value=v;o.textContent=names[v];return o;}));select.value=values.includes(preferred)?preferred:values[0];}
+  function notify(message){$('notice').hidden=false;$('notice').textContent=message;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').hidden=true,5000);}
+  function setPlaying(value){playing=value;last=null;$('play').textContent=value?'Ⅱ 暂停':'▶ 播放';$('state-label').textContent=value?'正在回放':t>=data.duration?'回放结束':'已暂停';}
+  function scenariosForLayout(){return [...new Set(data.runs.filter(r=>r.layout===$('layout').value).map(r=>r.scenario))];}
+  let scenario=run.scenario;
+  function rebuildScenarios(){const values=scenariosForLayout();if(!values.includes(scenario))scenario=values[0];$('scenarios').replaceChildren(...values.map(s=>{const b=document.createElement('button');b.textContent=scenarioNames[s];b.classList.toggle('active',s===scenario);b.onclick=()=>{scenario=s;rebuildScenarios();chooseRun(true);};return b;}));}
+  function chooseRun(reset){
+    const previous=$('policy').value, candidates=data.runs.filter(r=>r.layout===$('layout').value&&r.scenario===scenario);
+    options($('policy'),candidates.map(r=>r.policy),policyNames,previous);
+    run=candidates.find(r=>r.policy===$('policy').value);
+    if(previous&&previous!==run.policy)notify('当前组合没有该策略记录，已切换为'+policyNames[run.policy]+'。');
+    scene=data.layouts.find(s=>s.id===run.layout);renderer.setScene(scene);
+    if(reset){t=0;setPlaying(false);}
+    $('map-title').textContent=layoutNames[run.layout];$('map-subtitle').textContent=run.layout==='roundabout'?' / 单车道 · 逆时针':' / SUMO 实际路网';
+    $('seed').textContent=`SEED ${data.seed} · ${data.duration} 秒`;
+    $('policy-title').textContent=policyNames[run.policy];$('policy-note').textContent=notes[run.policy]+(run.policy==='dqn'?' '+(run.modelNote||data.modelNote||'训练程度未知。'):'');
+    $('run-description').textContent=`${layoutNames[run.layout]} · ${scenarioNames[run.scenario]} · ${policyNames[run.policy]} · ${run.planned} 辆计划到达`;
+    $('final-wait').replaceChildren(document.createTextNode(run.metrics.mean_wait_plus_entry_delay_all_s.toFixed(1)));const unit=document.createElement('small');unit.textContent='秒';$('final-wait').append(unit);
+    $('completion-rate').textContent=(run.metrics.completion_rate*100).toFixed(1)+'%';
+    lastFrame=-1;lastDecision=-2;updateInfo();
   }
-  function refreshRun() {
-    const scene = document.querySelector('[data-scenario].active')?.dataset.scenario || run.scenario;
-    run = data.runs.find(r => r.scenario === scene && r.policy === $('policy').value) || data.runs[0];
-    document.querySelectorAll('[data-scenario]').forEach(b => b.classList.toggle('active', b.dataset.scenario === run.scenario));
-    $('policy').value = run.policy;
-    $('policy-title').textContent = titles[run.policy]; $('policy-note').textContent = notes[run.policy];
-    $('run-description').textContent = `${scenarios[run.scenario]} / ${titles[run.policy]} · ${run.planned} 辆计划到达 · ${data.duration} 秒记录。策略切换保留当前回放时刻。`;
-    $('final-wait').innerHTML = `${run.metrics.mean_wait_plus_entry_delay_all_s.toFixed(1)}<small>秒</small>`;
-    $('completion-rate').textContent = `${(100*run.metrics.completion_rate).toFixed(1)}%`;
-    lastUI = -1;
+  function updateInfo(){
+    const items=[['道路',layoutNames[run.layout]],['车流',scenarioNames[run.scenario]],['策略',policyNames[run.policy]],['模型',run.policy==='dqn'?(run.modelNote||data.modelNote||'训练程度未知'):'规则基线，无模型参数更新'],['随机种子',data.seed],['回合长度',data.duration+' 秒'],['决策周期',data.simulation.delta_time+' 秒'],['物理步长',data.simulation.step_length+' 秒'],['绿灯范围',`${data.simulation.min_green}–${data.simulation.max_green} 秒`],['黄灯',data.simulation.yellow_time+' 秒'],['全红',run.layout==='intersection'?'旧布局无全红':(data.simulation.delta_time-data.simulation.yellow_time)+' 秒'],['奖励范围',run.rewardScope],['到达文件 SHA256',run.demandHash],['状态维度',run.observationLabels.length],['数据来源','合成车流，未实地校准']];
+    $('experiment-info').replaceChildren(...items.flatMap(([label,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;return [dt,dd];}));
   }
-  function setPlaying(value) {
-    playing = value;
-    $('play').textContent = playing ? 'Ⅱ 暂停回放' : '▶ 播放回放';
-    $('state-label').textContent = playing ? '正在回放' : t >= data.duration ? '回放结束' : '已暂停';
+  function setMode(value){learning=value;document.body.classList.toggle("learning-mode",value);setPlaying(false);$('learning').hidden=!value;$('step-controls').hidden=!value;$('demo-mode').classList.toggle('active',!value);$('learn-mode').classList.toggle('active',value);$('demo-mode').setAttribute('aria-pressed',!value);$('learn-mode').setAttribute('aria-pressed',value);$('page-title').textContent=value?'逐步理解一次强化学习决策。':'从一次放行，看懂交通决策。';$('mode-note').textContent=value?'按决策步查看真实状态、请求动作、执行约束和奖励。回放不会训练模型。':'选择道路与车流，观察不同控制策略如何影响车辆等待。';lastDecision=-2;}
+  // At a boundary show the just-completed transition; never present future rewards as observed.
+  function completedDecision(){let low=0,high=run.decisions.length;while(low<high){const m=(low+high)>>1;if(run.decisions[m].end<=t+1e-7)low=m+1;else high=m;}return low-1;}
+  function step(delta){setPlaying(false);const ends=[0,...run.decisions.map(d=>d.end)];if(delta>0)t=ends.find(v=>v>t+1e-7)??data.duration;else t=ends.findLast(v=>v<t-1e-7)??0;lastFrame=-1;lastDecision=-2;}
+  function tableRows(target,rows){$(target).replaceChildren(...rows.map(cells=>{const tr=document.createElement('tr');for(const text of cells){const td=document.createElement('td');td.textContent=text;tr.append(td);}return tr;}));}
+  function updateLearning(){
+    const i=completedDecision(),d=run.decisions[Math.max(0,i)],initial=i<0;
+    $('previous-step').disabled=t<=0;$('next-step').disabled=t>=data.duration;
+    $('step-position').textContent=`已完成 ${i+1} / ${run.decisions.length} 次决策 · 每步 ${data.simulation.delta_time} 秒`;
+    if(!learning||i===lastDecision)return;lastDecision=i;
+    $('decision-title').textContent=initial?'初始状态 · 尚未完成第一个决策':`第 ${d.index} 次决策 · ${clock(d.start)} → ${clock(d.end)}`;
+    $('decision-timing').textContent=initial?'点击“下一步”，查看执行一个决策周期后的真实反馈。':`下方展示最近完成的决策，反馈截至 ${clock(d.end)}；主画面当前时刻为时间轴所示。`;
+    $('state-summary').textContent=`决策前绿灯已持续 ${fmt(d.state.greenAge)} 秒。密度为车辆数与估计车道容量之比。`;
+    tableRows('state-rows',[...'NSEW'].map(k=>[direction(k)+'进口',d.state.density[k]===null?'无进口':`${d.state.queue[k]} / ${initial?'—':d.nextState.queue[k]} 辆`,d.state.density[k]===null?'—':(d.state.density[k]*100).toFixed(1)+'%']));
+    tableRows('vectors',run.observationLabels.map((label,j)=>[label,Number(d.observation[j]).toFixed(4),initial?'—':Number(d.nextObservation[j]).toFixed(4)]));
+    $('requested-action').textContent=initial?'尚未展示':run.policy==='yield'?'持续开放全部入口':actionName(d.requested);
+    $('executed-action').textContent=initial?'等待执行':run.policy==='yield'?'自然让行':actionName(d.executed);
+    $('action-reason').textContent=initial?'完成一个决策步后显示实际控制结果。':reasons[d.reason];
+    $('reward-total').textContent=initial?'—':fmt(d.reward);$('reward-scope').textContent=`停车项统计范围：${run.rewardScope}`;
+    const weights={stopped:data.rewardWeights.queue_weight,imbalance:run.layout==='intersection'?data.rewardWeights.imbalance_weight:0,switch:data.rewardWeights.switch_weight,invalid:1};
+    const labels={stopped:'停车车辆',imbalance:'南北/东西队列差',switch:'相位切换',invalid:'无效动作'};
+    $('reward-terms').replaceChildren(...Object.entries(labels).map(([key,label])=>{const row=document.createElement('div');row.className='reward-line';const name=document.createElement('span'),v=document.createElement('b');name.textContent=initial?label:`${label} ${d.rewardInputs[key]} × 权重 ${weights[key]}`;v.textContent=initial?'—':fmt(d.rewardTerms[key]);row.append(name,v);return row;}));
+    $('reward-formula').textContent=initial?'rₜ = 各奖励分项之和':Object.values(d.rewardTerms).map(v=>`(${fmt(v)})`).join(' + ')+` = ${fmt(d.reward)}`;
   }
-  document.querySelectorAll('[data-scenario]').forEach(b => b.addEventListener('click', () => {
-    document.querySelectorAll('[data-scenario]').forEach(other => other.classList.remove('active'));
-    b.classList.add('active'); refreshRun();
-  }));
-  $('policy').addEventListener('change', refreshRun);
-  $('play').onclick = () => { if (t >= data.duration) t = 0; setPlaying(!playing); };
-  $('restart').onclick = () => { t = 0; lastUI = -1; setPlaying(false); };
-  $('speed').onchange = e => { speed = Number(e.target.value); };
-  $('timeline').oninput = e => { t = Number(e.target.value); lastUI = -1; if (t >= data.duration) setPlaying(false); };
-  $('zoom-in').onclick = () => { radius = Math.max(55, radius - 15); };
-  $('zoom-out').onclick = () => { radius = Math.min(260, radius + 15); };
-  const focusButton = $('fullscreen'), focusHome = focusButton.parentElement;
-  focusButton.onclick = () => {
-    const active = document.body.classList.toggle('focus');
-    (active ? document.querySelector('.top') : focusHome).append(focusButton);
-    focusButton.setAttribute('aria-pressed', active);
-    focusButton.querySelector('span').textContent = active ? '退出专注' : '专注演示';
-    focusButton.setAttribute('aria-label', active ? '退出专注演示' : '专注演示');
-  };
-  document.addEventListener('keydown', e => { if (e.code === 'Space' && !['INPUT','SELECT','BUTTON'].includes(document.activeElement.tagName)) { e.preventDefault(); $('play').click(); } });
-  document.addEventListener('visibilitychange', () => { last = null; });
-  new ResizeObserver(() => {
-    const rect = canvas.getBoundingClientRect(); w = rect.width; h = rect.height;
-    const dpr = Math.min(devicePixelRatio || 1, 2); canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr); ctx.setTransform(dpr,0,0,dpr,0,0);
-  }).observe(canvas);
-  const X = x => w/2 + x*scale, Y = y => h/2 - y*scale;
-  function rounded(x,y,width,height,r,color) { ctx.fillStyle=color; ctx.beginPath(); ctx.roundRect(x,y,width,height,r); ctx.fill(); }
-  function line(x1,y1,x2,y2,color,width=1,dash=[]) { ctx.beginPath(); ctx.setLineDash(dash); ctx.strokeStyle=color; ctx.lineWidth=width; ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.setLineDash([]); }
-  function text(label,x,y,size=10,color='#6f8876',align='center') {ctx.font=`${size}px "Segoe UI","Microsoft YaHei",sans-serif`;ctx.textAlign=align;ctx.fillStyle=color;ctx.fillText(label,x,y);}
-  function tree(x,y,r=2.1) { x=X(x);y=Y(y);r*=scale;ctx.fillStyle='#1b583619';ctx.beginPath();ctx.ellipse(x+2,y+3,r,r*.8,0,0,7);ctx.fill();ctx.fillStyle='#a5bfa0';ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();ctx.fillStyle='#bcd0ad';ctx.beginPath();ctx.arc(x-r*.22,y-r*.22,r*.63,0,7);ctx.fill(); }
-  function building(x,y,bw,bh,label,color='#d8dfd0') {const bx=X(x),by=Y(y);rounded(bx+4,by+6,bw*scale,bh*scale,3,'#36563813');rounded(bx,by,bw*scale,bh*scale,3,'#c0cbbc');rounded(bx+2,by+2,bw*scale-4,bh*scale-5,2,color);ctx.strokeStyle='#edf0e6';ctx.lineWidth=1;ctx.strokeRect(bx+5,by+5,bw*scale-10,bh*scale-12);for(let i=0;i<3;i++)rounded(bx+9+i*7,by+8,4,8,1,'#abbfac');text(label,bx+bw*scale/2,by+bh*scale/2+9,10,'#778673'); }
-  function scene() {
-    ctx.clearRect(0,0,w,h); ctx.fillStyle='#e8efe4';ctx.fillRect(0,0,w,h);
-    ctx.strokeStyle='#dfe8d9';ctx.lineWidth=.7;for(let x=0;x<w;x+=36){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}for(let y=0;y<h;y+=36){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
-    rounded(X(-87),Y(49),64*scale,34*scale,10,'#dce8d1');rounded(X(23),Y(-17),63*scale,34*scale,10,'#dce8d1');
-    building(-69,39,31,17,'教学楼');building(32,41,32,18,'图书馆','#d5ddcc');building(-73,-25,35,17,'创新中心');
-    // Decorative campus park: no pedestrians or additional traffic simulated.
-    ctx.strokeStyle='#f4f6e8';ctx.lineWidth=3*scale;ctx.beginPath();ctx.ellipse(X(53),Y(-34),19*scale,9*scale,-.2,0,Math.PI*2);ctx.stroke();text('CAMPUS GARDEN',X(53),Y(-34)+3,8,'#90a17f');
-    for(const x of [-22,22])for(const y of [-49,-36,-23,23,36,49])tree(x,y,1.8);
-    for(const y of [-18,18])for(const x of [-83,-68,-53,-38,38,53,68,83])tree(x,y,1.7);
-    tree(-80,42,3);tree(79,34,3);tree(74,-40,2.8);tree(-28,-45,2.8);
-    // All vehicle locations use the unmodified SUMO world coordinates.
-    ctx.fillStyle='#c6d1c6';ctx.fillRect(X(-8.4),0,16.8*scale,h);ctx.fillRect(0,Y(8.4),w,16.8*scale);
-    ctx.fillStyle='#f3f2e8';ctx.fillRect(X(-7.5),0,15*scale,h);ctx.fillRect(0,Y(7.5),w,15*scale);
-    ctx.fillStyle='#344b50';ctx.fillRect(X(-5.4),0,10.8*scale,h);ctx.fillRect(0,Y(5.4),w,10.8*scale);
-    ctx.fillStyle='#30464c';ctx.fillRect(X(-7.2),Y(7.2),14.4*scale,14.4*scale);
-    const dash=[3*scale,3*scale];for(const sign of [-1,1]){
-      line(X(sign*.22),0,X(sign*.22),Y(10),'#d3bf88',.25*scale,dash);line(X(sign*.22),Y(-10),X(sign*.22),h,'#d3bf88',.25*scale,dash);
-      line(0,Y(sign*.22),X(-10),Y(sign*.22),'#d3bf88',.25*scale,dash);line(X(10),Y(sign*.22),w,Y(sign*.22),'#d3bf88',.25*scale,dash);
-      line(X(sign*3.7),0,X(sign*3.7),Y(8),'#9bb0ad',.12*scale);line(X(sign*3.7),Y(-8),X(sign*3.7),h,'#9bb0ad',.12*scale);
-      line(0,Y(sign*3.7),X(-8),Y(sign*3.7),'#9bb0ad',.12*scale);line(X(8),Y(sign*3.7),w,Y(sign*3.7),'#9bb0ad',.12*scale);
-    }
-    line(X(-3.2),Y(8.3),X(0),Y(8.3),'#eff1e5',.55*scale);line(X(0),Y(-8.3),X(3.2),Y(-8.3),'#eff1e5',.55*scale);
-    line(X(8.3),Y(0),X(8.3),Y(3.2),'#eff1e5',.55*scale);line(X(-8.3),Y(-3.2),X(-8.3),Y(0),'#eff1e5',.55*scale);
-    // Lane arrows point in the same directions as the actual incoming lanes.
-    for(const [x,y,angle] of [[-1.6,24,180],[1.6,-24,0],[24,1.6,270],[-24,-1.6,90]]) {ctx.save();ctx.translate(X(x),Y(y));ctx.rotate(angle*Math.PI/180);ctx.strokeStyle='#c8d2c8';ctx.lineWidth=.27*scale;ctx.beginPath();ctx.moveTo(0,2*scale);ctx.lineTo(0,-2*scale);ctx.moveTo(-.8*scale,-1.2*scale);ctx.lineTo(0,-2*scale);ctx.lineTo(.8*scale,-1.2*scale);ctx.stroke();ctx.restore();}
-    text('北 · N',X(11),Y(42),10);text('南 · S',X(-12),Y(-44),10);text('西 · W',X(-67),Y(-11),10);text('东 · E',X(68),Y(11),10);
+  function updateUI(frame,index){
+    $('time').textContent=clock(t);$('timeline').value=t;updateLearning();
+    if(index===lastFrame)return;lastFrame=index;
+    $('queue').textContent=frame.q.reduce((a,b)=>a+b,0);$('completed').textContent=frame.completed;$('avg-speed').textContent=frame.speed===null?'—':frame.speed.toFixed(1);
+    frame.q.forEach((q,i)=>{$(`q-${i}`).textContent=frame.light[i]==='-'?'—':q;$(`bar-${i}`).style.width=`${Math.min(100,q/Math.max(10,...frame.q)*100)}%`;});
+    [...frame.light].forEach((c,i)=>{const color=c.toLowerCase();$(`signal-${i}`).querySelectorAll('i').forEach(el=>el.classList.toggle('lit',el.dataset.color===color));$(`signal-${i}-label`).textContent=color==='g'?'通行':color==='y'?'过渡':color==='-'?'无进口':'等待';});
+    $('phase-label').textContent=run.policy==='yield'?'入口开放 · 环内优先':frame.light.includes('y')?'黄灯过渡':frame.light.toLowerCase().includes('g')?[...frame.light].map((c,i)=>c.toLowerCase()==='g'?'北南东西'[i]:'').join('')+'放行':'全红清空';
+    const d=run.decisions[completedDecision()];$('last-action').textContent=d?`最近完成决策 ${clock(d.end)}：${reasons[d.reason]}`:'尚未完成第一个决策。';
+    const values=run.frames.slice(Math.max(0,index-150),index+1).filter((_,j)=>j%5===0).map(f=>f.speed||0);$('spark').setAttribute('d',values.map((v,j)=>`${j?'L':'M'}${j/Math.max(1,values.length-1)*140} ${33-Math.min(45,v)/45*30}`).join(' '));
   }
-  function roadScene() {
-    ctx.clearRect(0,0,w,h);ctx.fillStyle='#e8efe4';ctx.fillRect(0,0,w,h);
-    function path(points,close=false){ctx.beginPath();points.forEach(([x,y],i)=>{const px=X(x-data.center[0]),py=Y(y-data.center[1]);if(i)ctx.lineTo(px,py);else ctx.moveTo(px,py);});if(close)ctx.closePath();}
-    for(const x of [-67,67])for(const y of [-45,-29,29,45])tree(x,y,2.3);
-    for(const [width,color] of [[2.1,'#c6d1c6'],[1.2,'#f3f2e8'],[0,'#344b50']]){
-      ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=color;
-      for(const lane of data.geometry.lanes){path(lane.shape);ctx.lineWidth=(lane.width+width)*scale;ctx.stroke();}
-      for(const shape of data.geometry.junctions){path(shape,true);ctx.fillStyle=color;ctx.fill();}
-    }
-    ctx.lineCap='butt';
-    for(const lane of data.geometry.lanes.filter(l=>!l.id.startsWith(':'))){path(lane.shape);ctx.strokeStyle='#dbe3cd45';ctx.lineWidth=.15*scale;ctx.setLineDash([2*scale,3*scale]);ctx.stroke();ctx.setLineDash([]);}
-    if(data.layout==='roundabout'){
-      for(const [x,y] of [[-7,5],[8,6],[0,-7]])tree(x,y,3.6);
-      text('CAMPUS',X(0),Y(-15),9,'#71886a');
-    }
-    text('北 · N',X(12),Y(54),10);text('南 · S',X(-12),Y(-54),10);text('西 · W',X(-74),Y(-12),10);text('东 · E',X(74),Y(12),10);
+  options($('layout'),data.layouts.map(s=>s.id),layoutNames,run.layout);options($('policy'),[],policyNames,'');rebuildScenarios();chooseRun(true);
+  for(const [i,label] of ['北进口','南进口','东进口','西进口'].entries()){const row=document.createElement('div');row.className='q-row';row.innerHTML=`<span>${label}</span><div class="bar"><div class="fill" id="bar-${i}"></div></div><b id="q-${i}">0</b>`;$('direction-queues').append(row);}
+  document.querySelectorAll('.signal-row').forEach(el=>el.remove());for(const [i,label] of ['北','南','东','西'].entries()){const row=document.createElement('div');row.className='signal-row';row.innerHTML=`<span>${label}进口</span><div class="traffic-light" id="signal-${i}"><i data-color="r"></i><i data-color="y"></i><i data-color="g"></i></div><b id="signal-${i}-label"></b>`;document.querySelector('.signal-panel').append(row);}
+  $('layout').onchange=()=>{rebuildScenarios();chooseRun(true);};$('policy').onchange=()=>chooseRun(false);
+  $('demo-mode').onclick=()=>setMode(false);$('learn-mode').onclick=()=>setMode(true);
+  $('play').onclick=()=>{if(t>=data.duration)t=0;setPlaying(!playing);};$('restart').onclick=()=>{t=0;lastFrame=-1;lastDecision=-2;setPlaying(false);};
+  $('timeline').max=data.duration;$('duration').textContent=clock(data.duration);$('timeline').oninput=e=>{t=Number(e.target.value);setPlaying(false);lastFrame=-1;lastDecision=-2;};
+  $('speed').onchange=e=>speed=Number(e.target.value);$('previous-step').onclick=()=>step(-1);$('next-step').onclick=()=>step(1);
+  $('zoom-in').onclick=()=>renderer.setZoom(renderer.zoom*1.2);$('zoom-out').onclick=()=>renderer.setZoom(renderer.zoom/1.2);$('reset-view').onclick=()=>renderer.reset();
+  const focusButton=$('fullscreen'),focusHome=focusButton.parentElement;focusButton.onclick=()=>{const active=document.body.classList.toggle('focus');(active?document.querySelector('.top'):focusHome).append(focusButton);focusButton.setAttribute('aria-pressed',active);focusButton.querySelector('span').textContent=active?'退出专注':'专注演示';};
+  const openDialog=id=>{setPlaying(false);$(id).showModal();};$('guide-open').onclick=()=>openDialog('guide-dialog');$('info-open').onclick=()=>{updateInfo();openDialog('info-dialog');};
+  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());$('guide-learn').onclick=()=>{$('guide-dialog').close();setMode(true);};
+  document.querySelectorAll('[data-concept]').forEach(b=>b.onclick=()=>{const [title,body]=concepts[b.dataset.concept];$('concept-title').textContent=title;$('concept-body').textContent=body;openDialog('concept-dialog');});
+  document.addEventListener('keydown',e=>{if(document.querySelector('dialog[open]')||['INPUT','SELECT','BUTTON','SUMMARY'].includes(document.activeElement.tagName))return;if(e.code==='Space'){e.preventDefault();$('play').click();}if(learning&&['ArrowRight','ArrowLeft'].includes(e.key)){e.preventDefault();step(e.key==='ArrowRight'?1:-1);}});
+  document.addEventListener('visibilitychange',()=>{last=null;fpsStart=null;fpsFrames=0;});
+  function animate(now){
+    const elapsed=last===null?0:Math.min((now-last)/1000,.1);last=now;if(playing){t=Math.min(data.duration,t+elapsed*speed);if(t>=data.duration)setPlaying(false);}
+    const frames=run.frames;let i=Math.min(frames.length-1,Math.floor(t/data.sampleInterval));while(i>0&&frames[i].t>t)i--;while(i+1<frames.length&&frames[i+1].t<=t)i++;
+    const f=frames[i],next=frames[Math.min(i+1,frames.length-1)],a=next.t>f.t?(t-f.t)/(next.t-f.t):0;
+    const d=run.decisions[completedDecision()];const highlight=learning&&d?(run.policy==='yield'?[...'NSEW']:run.layout==='intersection'?(d.executed===0?['N','S']:['E','W']):['NSEW'[d.executed]]):[];
+    renderer.draw(f,next,a,highlight);updateUI(f,i);fpsFrames++;if(fpsStart===null)fpsStart=now;if(now-fpsStart>=1000){$('fps').textContent=` · ${Math.round(fpsFrames*1000/(now-fpsStart))} FPS`;fpsStart=now;fpsFrames=0;}
+    requestAnimationFrame(animate);
   }
-  function lamp(x,y,color) {const fill=color.toLowerCase()==='g'?'#66d5a7':color==='y'?'#f2bf5a':'#ee8278';ctx.save();ctx.translate(X(x),Y(y));rounded(-6,-6,12,12,4,'#203c37');ctx.shadowBlur=9;ctx.shadowColor=fill;ctx.fillStyle=fill;ctx.beginPath();ctx.arc(0,0,3.1,0,7);ctx.fill();ctx.restore();}
-  function car(v,next,a) {
-    const x = v[1] + (next ? (next[1]-v[1])*a : 0) - data.center[0];
-    const y = v[2] + (next ? (next[2]-v[2])*a : 0) - data.center[1];
-    if(X(x)<-30||X(x)>w+30||Y(y)<-30||Y(y)>h+30)return;
-    ctx.save();ctx.translate(X(x),Y(y));ctx.rotate((v[3]+(next?((next[3]-v[3]+540)%360-180)*a:0))*Math.PI/180);
-    // SUMO positions are vehicle front bumpers; draw the body behind them.
-    const cw=1.8*scale,cl=4.7*scale;
-    rounded(-cw/2+1,1,cw,cl,Math.max(1,cw*.22),'#102d3533');
-    const colors=['#258d78','#d5e2df','#6f9da4','#87bbae'];const color=v[4]<.5?'#dca55c':colors[v[0]%colors.length];
-    rounded(-cw/2,0,cw,cl,Math.max(1,cw*.22),color);
-    rounded(-cw*.36,cl*.2,cw*.72,cl*.19,1,'#25494e');rounded(-cw*.34,cl*.67,cw*.68,cl*.13,1,'#365c5a');
-    ctx.fillStyle='#f4edcf';ctx.fillRect(-cw*.38,1,cw*.22,Math.max(1,scale*.2));ctx.fillRect(cw*.16,1,cw*.22,Math.max(1,scale*.2));
-    if(v[4]<.5){ctx.fillStyle='#ea7461';ctx.fillRect(-cw*.4,cl-2,cw*.2,2);ctx.fillRect(cw*.2,cl-2,cw*.2,2);}ctx.restore();
-  }
-  function ui(frame,index) {
-    $('time').textContent=clock(t);$('timeline').value=t;
-    if(index===lastUI)return;lastUI=index;
-    $('queue').textContent=frame.q.reduce((a,b)=>a+b,0);$('completed').textContent=frame.completed;
-    $('avg-speed').textContent=frame.speed===null?'—':frame.speed.toFixed(1);
-    frame.q.forEach((v,i)=>{$(`q-${i}`).textContent=v;$(`bar-${i}`).style.width=`${Math.min(100,v/Math.max(10,...frame.q)*100)}%`;});
-    for(const [id,color] of [...frame.light].map((c,i)=>[`signal-${i}`,c])){const c=color.toLowerCase();$(id).querySelectorAll('i').forEach(el=>el.classList.toggle('lit',el.dataset.color===c));$(`${id}-label`).textContent=c==='g'?'通行':c==='y'?'过渡':c==='-'?'无进口':'等待';}
-    $('phase-label').textContent=frame.light.includes('y')?'黄灯过渡':frame.light.toLowerCase().includes('g')?[...frame.light].map((c,i)=>c.toLowerCase()==='g'?'北南东西'[i]:'').join('')+'放行':'全红清空';
-    const values=run.frames.slice(Math.max(0,index-150),index+1).filter((_,i)=>i%5===0).map(f=>f.speed||0);
-    $('spark').setAttribute('d',values.map((v,i)=>`${i?'L':'M'}${i/Math.max(1,values.length-1)*140} ${33-Math.min(45,v)/45*30}`).join(' '));
-  }
-  function animate(now) {
-    const elapsed=last===null?0:Math.min((now-last)/1000,.1);last=now;
-    if(playing){t=Math.min(data.duration,t+elapsed*speed);if(t>=data.duration)setPlaying(false);}
-    scale=Math.min(w/190,h/125)*95/radius;
-    const frames=run.frames;frameIndex=Math.min(frames.length-1,Math.floor(t/data.sampleInterval));
-    // FCD samples are evenly spaced, but locate defensively at the boundary.
-    while(frameIndex>0&&frames[frameIndex].t>t)frameIndex--;
-    while(frameIndex+1<frames.length&&frames[frameIndex+1].t<=t)frameIndex++;
-    const f=frames[frameIndex],next=frames[Math.min(frameIndex+1,frames.length-1)];
-    const alpha=next.t>f.t?Math.max(0,Math.min(1,(t-f.t)/(next.t-f.t))):0;
-    if(data.geometry) roadScene(); else scene();const nextById=new Map(next.v.map(v=>[v[0],v]));for(const v of f.v)car(v,nextById.get(v[0]),alpha);
-    if(data.geometry){for(const s of data.geometry.signals)lamp(s.position[0]-data.center[0],s.position[1]-data.center[1],f.light['NSEW'.indexOf(s.direction)]);}else{lamp(-7,10,f.light[0]);lamp(7,-10,f.light[1]);lamp(10,7,f.light[2]);lamp(-10,-7,f.light[3]);}
-    ui(f,frameIndex);requestAnimationFrame(animate);
-  }
-  refreshRun();setPlaying(false);requestAnimationFrame(animate);
+  setPlaying(false);requestAnimationFrame(animate);
 })();

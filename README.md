@@ -36,7 +36,17 @@ Repository: `campus-traffic-signal-rl`
 
 ## 先运行起来
 
-### 精美交通演示页面（推荐课堂展示）
+### 学习与团队展示实验台
+
+```powershell
+.\.venv\Scripts\python.exe -m traffic_rl show --layouts intersection crossroads tjunction roundabout --scenarios balanced peak surge --seconds 300
+```
+
+同一页面切换道路与车流；进入“学习模式”，用“上一步 / 下一步”查看真实的状态、请求动作、控制约束和奖励计算。“项目导览”适合向队友介绍课程选题，“实验信息”提供复现条件。回放不会更新模型参数。使用 `--model` 可加入兼容道路的 DQN 记录；旧直行路口与新道路模型维度不同。
+
+操作与分享方法见 [学习实验台说明](docs/learning_lab.md)。
+
+### 单道路交通演示
 
 ```powershell
 .\.venv\Scripts\python.exe -m traffic_rl show
@@ -52,7 +62,7 @@ Repository: `campus-traffic-signal-rl`
 
 这里的模型路径仅适用于本机已有短程模型；新克隆的仓库请使用实际训练得到的模型路径。DQN 是否训练充分会影响策略表现，页面不会预设它优于基线。
 
-生成结果位于命令打印的 `outputs/presentation_.../index.html`。之后直接双击该文件即可回放，无需再次启动 SUMO，也无需联网或安装 Node.js。分享时应保留整个输出文件夹，至少包含 `index.html`、`style.css`、`app.js`、`recordings.js`；用 `--no-open` 可以只导出不打开浏览器。
+生成结果位于命令打印的 `outputs/presentation_.../index.html`。之后直接双击该文件即可回放，无需再次启动 SUMO，也无需联网或安装 Node.js。分享时应保留整个输出文件夹，至少包含 `index.html`、`style.css`、`app.js`、`renderer.js`、`recordings.js`；用 `--no-open` 可以只导出不打开浏览器。
 
 该页面是 **SUMO 实际轨迹回放**，不是在线控制或实时训练。切换策略读取相同到达记录的另一段仿真，保留当前时间。指标基于记录采样，动画在采样之间插值；校园楼宇和绿化仅作示意，不代表真实地理位置或已模拟行人。底部指标明确为整段结果，右侧为当前回放状态。当前车速按路网中所有车辆计算，进口排队为四条进口车道速度低于 0.1 m/s 的车辆数。
 

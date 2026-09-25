@@ -114,6 +114,7 @@ class IntersectionEnv(gym.Wrapper):
             raise ValueError(f"Invalid phase: {action}")
         sim = self.config["simulation"]
         previous = self.signal.green_phase
+        min_blocked = self.signal.time_since_last_phase_change < self.signal.yellow_time + self.signal.min_green
         executed = requested
         forced = False
         # SUMO-RL 1.4.5 stores max_green but does not enforce it. Switch before
@@ -129,6 +130,9 @@ class IntersectionEnv(gym.Wrapper):
         weights = self.config["reward"]
         imbalance = abs(queue["N"] + queue["S"] - queue["E"] - queue["W"])
         reward = -(weights["queue_weight"] * sum(queue.values()) + weights["imbalance_weight"] * imbalance + weights["switch_weight"] * int(switched))
+        info["action_reason"] = "max_green" if forced and switched else "min_green" if requested != previous and min_blocked else "switch" if switched else "hold"
+        info["reward_terms"] = {"stopped": -weights["queue_weight"] * sum(queue.values()), "imbalance": -weights["imbalance_weight"] * imbalance, "switch": -weights["switch_weight"] * int(switched), "invalid": 0.0}
+        info["reward_inputs"] = {"stopped": sum(queue.values()), "imbalance": imbalance, "switch": int(switched), "invalid": 0}
         info.update({"requested_action": requested, "selected_action": executed, "phase": self.signal.green_phase, "switched": switched, "forced_switch": forced and switched, "switches": self.switches, "queue_total": sum(queue.values()), "green_age": self.green_age})
         info.update({f"queue_{key}": value for key, value in queue.items()})
         return self._observation(observation), float(reward), terminated, truncated, info
