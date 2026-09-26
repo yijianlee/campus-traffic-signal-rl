@@ -29,12 +29,10 @@ window.TrafficRenderer = class {
     for(const lane of g.lanes.filter(l=>!l.id.startsWith(':'))){
       ctx.strokeStyle='#c9d6c339';ctx.lineWidth=Math.max(.5,.13*this.scale);ctx.setLineDash([2*this.scale,3*this.scale]);this.path(ctx,lane.shape);ctx.stroke();ctx.setLineDash([]);
       const shape=lane.shape;
-      if(lane.id.startsWith('ring_')){const i=Math.floor(shape.length/2);const a=shape[i-1],b=shape[i];this.arrow(ctx,b,Math.atan2(-(b[1]-a[1]),b[0]-a[0]));}
-      else if(/_(in|out)_0$/.test(lane.id)){const a=shape[0],b=shape.at(-1),length=Math.hypot(b[0]-a[0],b[1]-a[1]);const f=lane.id.includes('_in_')?Math.max(0,1-14/length):Math.min(1,14/length);this.arrow(ctx,[a[0]+f*(b[0]-a[0]),a[1]+f*(b[1]-a[1])],Math.atan2(-(b[1]-a[1]),b[0]-a[0]));}
+      if(/_(in|out)_0$/.test(lane.id)){const a=shape[0],b=shape.at(-1),length=Math.hypot(b[0]-a[0],b[1]-a[1]);const f=lane.id.includes('_in_')?Math.max(0,1-14/length):Math.min(1,14/length);this.arrow(ctx,[a[0]+f*(b[0]-a[0]),a[1]+f*(b[1]-a[1])],Math.atan2(-(b[1]-a[1]),b[0]-a[0]));}
     }
     for(const signal of g.signals){const lane=g.lanes.find(l=>l.id===signal.direction+'_in_0');if(!lane)continue;const a=lane.shape.at(-2),b=lane.shape.at(-1),len=Math.hypot(b[0]-a[0],b[1]-a[1]);const normal=[-(b[1]-a[1])/len*1.5,(b[0]-a[0])/len*1.5];this.path(ctx,[[b[0]-normal[0],b[1]-normal[1]],[b[0]+normal[0],b[1]+normal[1]]]);ctx.strokeStyle='#f0eee1';ctx.lineWidth=.5*this.scale;ctx.stroke();}
-    if(this.scene.id==='roundabout'){for(const [x,y] of [[-7,5],[8,6],[0,-7]]){const p=this.point(this.scene.center[0]+x,this.scene.center[1]+y);ctx.fillStyle='#b1c89e';ctx.beginPath();ctx.arc(...p,3.6*this.scale,0,Math.PI*2);ctx.fill();}}
-    ctx.font='10px "Microsoft YaHei",sans-serif';ctx.fillStyle='#6d856b';ctx.textAlign='center';for(const [d,x,y] of [['北 N',12,56],['南 S',-12,-56],['东 E',76,12],['西 W',-76,-12]]){if(this.scene.id==='tjunction'&&d==='北 N')continue;ctx.fillText(d,...this.point(this.scene.center[0]+x,this.scene.center[1]+y));}
+    ctx.font='10px "Microsoft YaHei",sans-serif';ctx.fillStyle='#6d856b';ctx.textAlign='center';for(const [d,x,y] of [['北 N',12,56],['南 S',-12,-56],['东 E',76,12],['西 W',-76,-12]]){ctx.fillText(d,...this.point(this.scene.center[0]+x,this.scene.center[1]+y));}
     this.dirty=false;
   }
   draw(frame,next,alpha,highlight=[]){

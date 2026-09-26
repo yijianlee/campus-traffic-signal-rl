@@ -1,37 +1,45 @@
-# 训练与评估
+# 实验设计
 
-训练覆盖三种新道路和四种车流：
+## 综合车流
 
-```powershell
-.\.venv\Scripts\python.exe -m traffic_rl train --layout mixed --scenario mixed --steps 30000 --out outputs/diverse_dqn
-```
+同一回合包含低流量、南北偏流、高峰、东西偏流回落四阶段。默认每 60 秒更新到达率，再叠加 ±20% 随机波动；车辆按分段泊松过程到达，直行概率约 50%，左右转各约 25%。短于 60 秒的冒烟测试可能只覆盖一个阶段，正式实验应使用 600 秒或更长。
 
-评估时按道路分别运行，统一车流、时长和种子：
+训练每回合使用 `100000 + 训练种子 × 1000 + 回合编号` 生成新车流；评估种子限制为 0–99999，默认 101–105。每个训练种子分配 1000 个回合种子，程序会拒绝超出范围的训练。两种策略使用相同到达文件及仿真随机种子。正式实验建议至少三个训练种子，独立测试种子保持一致。
 
-```powershell
-.\.venv\Scripts\python.exe -m traffic_rl evaluate --layout roundabout --policies fixed queue yield dqn --model outputs/diverse_dqn/model.zip --scenarios balanced peak tidal surge --seeds 101 102 103
-.\.venv\Scripts\python.exe -m traffic_rl show --layouts crossroads tjunction roundabout --scenarios balanced peak surge --model outputs/diverse_dqn/model.zip --seconds 300
-```
+## 产物与指标
 
-`yield` 仅用于环岛。旧路口 `intersection` 不支持 `surge`，多路网导出时自动跳过该组合。旧模型仅兼容旧路口；不指定 `--layout` 的旧命令行为保持不变。
-
-| 产物 | 用途 |
+| 产物 | 内容 |
 |---|---|
-| model.zip、run.json | 模型、训练步数、参数和复现信息 |
-| summary.csv、report.md | 各策略评估结果 |
-| tripinfo.xml、trace.csv | 行程数据、逐步状态与奖励 |
-| index.html、manifest.json | 离线实验台与运行配置 |
+| model.zip、run.json | 模型、配置、训练种子、权重更新检查 |
+| monitor.csv、learning_curve.png | 每回合奖励与平滑曲线 |
+| summary.csv、aggregate.csv | 每个测试种子的结果及均值、样本标准差 |
+| comparison.png、report.md | DQN 与固定配时对照 |
+| trace.csv、tripinfo.xml | 逐步过程与行程记录 |
 
-重点比较平均等待加入网延迟、完成率、未完成车辆数、停车队列和安全事件。未完成车辆不能从等待统计中简单丢弃；具体口径见 `experiments/metrics.py`。
+核心指标：平均停车等待＋入网延迟、平均排队、完成率。等待统计涵盖已完成、未完成和未入网车辆，但只计到仿真结束；不能把未完成车辆直接丢弃。各方向等待、安全事件也保存在 summary.csv。
 
-使用多个训练种子、独立评估种子，报告均值与波动。短程训练只用于验证流程，不能说明 DQN 已收敛或优于规则策略。数据为合成交通，现实结论需要实地校准。
+曲线下降或波动是可能的，不能只选最好的一次。比较时保持车流、仿真时长、信号约束一致；结果不好也应如实报告。测试种子用于最终评估，调参应另留验证种子。
 
-默认配置见 `configs/default.json`；一次只改变一个因素。训练必须超过 `learning_starts`，程序会验证参数实际改变、保存和重新加载成功。
+## 一项后续改进
 
-运行回归测试：
+固定其余条件，比较切换惩罚 0、0.2、1.0。对每个配置重复训练，分析等待、完成率和切换次数。不要同时修改车流、状态与算法，否则难以归因。
+
+## 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
+node tests/test_loader.cjs
 ```
 
-测试覆盖路网与需求复现、控制约束、环境空间、奖励拆解、指标、离线分包，以及重构前后逐步行为一致性。历史研究计划与资源保留在 [archive](archive/experiment_plan.md)。
+Python 测试覆盖车流复现、转弯连接、Gymnasium 接口、信号过渡、奖励、种子划分、回放及未完成行程统计。Node 仅用于可选的网页加载器开发测试，运行项目无需安装 Node。
+
+## 首次流程验证记录
+
+2026-09-26：训练种子 42，3,000 步、25 回合，每回合 600 秒；完成 625 次梯度更新，权重变化与保存重载检查通过。测试使用 101–105 五个独立种子，每次 600 秒。
+
+| 策略 | 等待＋入网延迟（秒） | 平均队列（辆） | 完成率 |
+|---|---:|---:|---:|
+| 固定配时 | 39.84 ± 2.94 | 11.40 ± 1.22 | 84.7% ± 2.8% |
+| DQN | 126.30 ± 5.94 | 35.85 ± 1.45 | 41.1% ± 2.0% |
+
+这是短程训练模型的实际结果，DQN 明显劣于基线。它验证流程能够运行，不支持“强化学习已经优化成功”的结论。后续先延长训练，再在独立验证种子上调参，并检查分方向等待；不要反复针对上述测试种子选择模型。

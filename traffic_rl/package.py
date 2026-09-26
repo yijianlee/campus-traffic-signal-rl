@@ -8,7 +8,7 @@ from pathlib import Path
 def write_package(data, folder):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    assets = Path(__file__).parents[1] / "web"
+    assets = Path(__file__).parent / "web"
     for source in assets.rglob("*"):
         if source.is_file():
             target = folder / source.relative_to(assets)

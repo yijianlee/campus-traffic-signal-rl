@@ -1,6 +1,6 @@
 from __future__ import annotations
-from ..common.runtime import ROOT, binary, save_json
-from ..common.artifacts import versions
+from .config import ROOT, binary, save_json
+from .artifacts import versions
 import json
 import platform
 import subprocess
@@ -8,8 +8,8 @@ def doctor(args, config):
     import torch
     info = {"python": platform.python_version(), "platform": platform.platform(), "packages": versions(), "cuda_available": torch.cuda.is_available(), "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "sumo_binary": binary("sumo")}
     subprocess.run([binary("sumo"), "--version"], check=True, capture_output=True)
-    from ..envs.factory import make_env
-    env = make_env(config, "balanced", 101)
+    from .env import IntersectionEnv
+    env = IntersectionEnv(config, 101)
     try:
         observation, _ = env.reset(seed=101)
         _, reward, _, _, _ = env.step(0)

@@ -2,7 +2,7 @@
 import importlib.metadata
 from datetime import datetime
 from pathlib import Path
-from .runtime import ROOT
+from .config import ROOT
 
 def output_dir(value: str | None, prefix: str) -> Path:
     relative = value or f"outputs/{prefix}_{datetime.now():%Y%m%d_%H%M%S_%f}"
@@ -16,5 +16,5 @@ def output_dir(value: str | None, prefix: str) -> Path:
     return path
 
 def versions() -> dict:
-    names = ["eclipse-sumo", "sumo-data", "traci", "sumolib", "sumo-rl", "stable-baselines3", "gymnasium", "numpy", "torch", "pandas", "pettingzoo"]
+    names = ["eclipse-sumo", "sumo-data", "traci", "sumolib", "stable-baselines3", "gymnasium", "numpy", "torch", "pandas"]
     return {name: importlib.metadata.version(name) for name in names}

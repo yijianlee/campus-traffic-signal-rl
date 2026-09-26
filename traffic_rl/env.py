@@ -1,4 +1,4 @@
-"""Shared four-approach signal control across turning junctions and metered rings."""
+"""One turning intersection: 14 observations, four approach-release actions."""
 from __future__ import annotations
 
 import copy
@@ -8,25 +8,20 @@ import xml.etree.ElementTree as ET
 import gymnasium as gym
 import numpy as np
 
-from ..common.runtime import ROOT, binary, configure_sumo
-from ..networks.roadnet import DIRECTIONS, LAYOUTS, SCENARIOS, directions, network, routes
+from .config import ROOT, binary, configure_sumo
+from .network import DIRECTIONS, network
+from .demand import routes
 
 configure_sumo()
 import traci
 
 
-class RoadEnv(gym.Env):
+class IntersectionEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, config, scenario, seed, vary_demand=False, gui=False, gui_delay=100, tripinfo=None):
+    def __init__(self, config, seed=42, vary_demand=False, gui=False, gui_delay=100, tripinfo=None):
         super().__init__()
-        if config["layout"] not in (*LAYOUTS, "mixed") or scenario not in (*SCENARIOS, "mixed"):
-            raise ValueError("Unsupported road layout or traffic scenario.")
-        if config["simulation"]["road_length_m"] <= 60:
-            raise ValueError("New layouts require road_length_m > 60 to leave space for the junction and ring entry gates.")
         self.config = copy.deepcopy(config)
-        self.layout_choice = config["layout"]
-        self.scenario_choice = scenario
         self.base_seed = seed
         self.vary_demand = vary_demand
         self.episode_index = 0
@@ -35,7 +30,7 @@ class RoadEnv(gym.Env):
         self.additional_sumo_cmd = ""
         self.sumo = None
         self.action_space = gym.spaces.Discrete(4)
-        self.observation_space = gym.spaces.Box(0, 1, (22,), np.float32)
+        self.observation_space = gym.spaces.Box(0, 1, (14,), np.float32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -44,14 +39,10 @@ class RoadEnv(gym.Env):
             self.base_seed, self.episode_index = seed, 0
         demand_seed = 100000 + self.base_seed * 1000 + self.episode_index if self.vary_demand else self.base_seed
         self.episode_index += 1
-        rng = np.random.default_rng(demand_seed)
-        self.layout = str(rng.choice(LAYOUTS)) if self.layout_choice == "mixed" else self.layout_choice
-        self.scenario = str(rng.choice(SCENARIOS)) if self.scenario_choice == "mixed" else self.scenario_choice
-        self.config["layout"] = self.layout
-        self.active = directions(self.layout)
+        self.active = DIRECTIONS
         net = network(self.config)
-        route, _ = routes(self.config, self.scenario, demand_seed)
-        self.episodes.append({"layout": self.layout, "scenario": self.scenario, "demand_seed": demand_seed})
+        route, _ = routes(self.config, demand_seed)
+        self.episodes.append({"demand_seed": demand_seed})
         sim = self.config["simulation"]
         command = [binary("sumo-gui" if self.gui else "sumo"), "-n", net.relative_to(ROOT).as_posix(), "-r", route.relative_to(ROOT).as_posix(), "--seed", str(demand_seed), "--step-length", str(sim["step_length"]), "--no-step-log", "true", "--duration-log.disable", "true", "--xml-validation", "never", "--time-to-teleport", "-1", "--max-depart-delay", "-1", "--collision.check-junctions", "true"]
         if self.gui:
@@ -75,13 +66,12 @@ class RoadEnv(gym.Env):
         self.green_age = 0
         self.sim_step = 0
         self.switches = self.forced_switches = self.collisions = self.teleports = 0
-        self.unmetered = False
         self._lights("G")
         return self._observation(), {}
 
     def _lights(self, color):
         for tl, links in self.links.items():
-            state = "".join("G" if self.unmetered else color if links[i] == DIRECTIONS[self.phase] else "r" for i in range(len(links)))
+            state = "".join(color if links[i] == DIRECTIONS[self.phase] else "r" for i in range(len(links)))
             self.sumo.trafficlight.setRedYellowGreenState(tl, state)
 
     def light_state(self):
@@ -105,28 +95,27 @@ class RoadEnv(gym.Env):
 
     def _observation(self):
         sim = self.config["simulation"]
-        mask = [float(d in self.active) for d in DIRECTIONS]
         queue = [min(q / 40, 1) for q in self.queues().values()]
         density = [min(self.sumo.lane.getLastStepVehicleNumber(f"{d}_in_0") / max(1, self.sumo.lane.getLength(f"{d}_in_0") / 7.5), 1) if d in self.active else 0 for d in DIRECTIONS]
-        ring = sum(self.sumo.edge.getLastStepVehicleNumber(f"ring_{d}") for d in DIRECTIONS) / 24 if self.layout == "roundabout" else 0
-        return np.array(mask + queue + density + [float(i == self.phase) for i in range(4)] + [min(self.green_age / sim["max_green"], 1), self.sim_step / sim["duration_seconds"], min(ring, 1)] + [float(self.layout == v) for v in LAYOUTS], dtype=np.float32)
+        return np.array(queue + density + [float(i == self.phase) for i in range(4)]
+                        + [min(self.green_age / sim["max_green"], 1), self.sim_step / sim["duration_seconds"]], dtype=np.float32)
 
     def step(self, action):
         if not self.action_space.contains(action):
             raise ValueError(f"Invalid action: {action}")
         sim = self.config["simulation"]
         requested = int(action)
-        invalid = DIRECTIONS[requested] not in self.active
         previous = self.phase
         min_blocked = self.green_age < sim["min_green"]
-        selected = self.phase if invalid or self.green_age < sim["min_green"] else requested
-        forced = not self.unmetered and self.green_age + sim["delta_time"] > sim["max_green"]
+        selected = self.phase if self.green_age < sim["min_green"] else requested
+        forced = self.green_age + sim["delta_time"] > sim["max_green"]
         if forced:
             selected = DIRECTIONS.index(self.active[(self.active.index(DIRECTIONS[self.phase]) + 1) % len(self.active)])
             self.forced_switches += 1
-        switched = selected != self.phase and not self.unmetered
+        switched = selected != self.phase
         if switched:
             self.switches += 1
+        waiting = 0
         for tick in range(sim["delta_time"]):
             if switched:
                 # Entire decision interval clears the intersection: yellow then all-red.
@@ -134,25 +123,31 @@ class RoadEnv(gym.Env):
             else:
                 self._lights("G")
             self._sumo_step()
+            waiting += sum(self.sumo.vehicle.getSpeed(v) < .1 for v in self.sumo.vehicle.getIDList())
         if switched:
             self.phase, self.green_age = selected, 0
             self._lights("G")
         else:
             self.green_age += sim["delta_time"]
         q = self.queues()
-        stopped = sum(self.sumo.vehicle.getSpeed(v) < .1 for v in self.sumo.vehicle.getIDList())
-        reward = -float(stopped) * self.config["reward"]["queue_weight"] - float(invalid) - float(switched) * self.config["reward"]["switch_weight"]
+        stopped = waiting / sim["delta_time"]
+        reward = -float(stopped) * self.config["reward"]["queue_weight"] - float(switched) * self.config["reward"]["switch_weight"]
         info = {"step": self.sim_step, "requested_action": requested, "selected_action": self.phase, "phase": self.phase, "green_age": self.green_age, "switched": int(switched), "forced_switch": int(forced), "queue_total": sum(q.values()), "collisions": self.collisions, "teleports": self.teleports, **{f"queue_{d}": v for d, v in q.items()}}
-        info["action_reason"] = "unmetered" if self.unmetered else "max_green" if forced else "invalid" if invalid else "min_green" if min_blocked and requested != previous else "switch" if switched else "hold"
-        info["reward_terms"] = {"stopped": -float(stopped) * self.config["reward"]["queue_weight"], "imbalance": 0.0, "switch": -float(switched) * self.config["reward"]["switch_weight"], "invalid": -float(invalid)}
-        info["reward_inputs"] = {"stopped": stopped, "imbalance": 0, "switch": int(switched), "invalid": int(invalid)}
+        info["action_reason"] = "max_green" if forced else "min_green" if min_blocked and requested != previous else "switch" if switched else "hold"
+        info["reward_terms"] = {"stopped": -float(stopped) * self.config["reward"]["queue_weight"], "switch": -float(switched) * self.config["reward"]["switch_weight"]}
+        info["reward_inputs"] = {"stopped": stopped, "switch": int(switched)}
         return self._observation(), reward, False, self.sim_step >= sim["duration_seconds"], info
 
-    def baseline_action(self, policy):
-        from ..agents.baselines import road_action
-        return road_action(self, policy)
+    def baseline_action(self):
+        """Fixed-time comparison using the same signal transition constraints."""
+        return (self.phase + 1) % 4 if self.green_age >= self.config["simulation"]["fixed_green"] else self.phase
 
     def close(self):
         if self.sumo is not None:
             self.sumo.close()
             self.sumo = None
+
+
+def validate_model(model, env):
+    if model.observation_space.shape != env.observation_space.shape or model.action_space.n != env.action_space.n:
+        raise ValueError("Model is incompatible with the 14-state course environment. Retrain with the current train command.")

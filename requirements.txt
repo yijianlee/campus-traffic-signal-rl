@@ -3,7 +3,6 @@ eclipse-sumo==1.27.1
 sumo-data==1.27.1
 traci==1.27.1
 sumolib==1.27.1
-sumo-rl==1.4.5
 stable-baselines3==2.9.0
 gymnasium==1.3.0
 numpy>=2.0,<3

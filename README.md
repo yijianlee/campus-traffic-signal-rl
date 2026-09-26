@@ -1,27 +1,49 @@
-# Campus Traffic Signal RL
+# Traffic Signal RL
 
-面向强化学习入门与课程团队展示的交通信号控制项目，基于 SUMO、Gymnasium 和 DQN。
+机器学习课程设计：**基于深度强化学习的十字路口信号控制优化**。
 
-支持直行/转弯十字路口、丁字路口、入口受控环岛；通过固定配时、排队优先和自然让行基线评估策略效果。
+研究一个含直行、左转、右转的十字路口，在综合变化车流下训练 DQN，检验它能否比固定配时减少等待。前端仅展示 DQN 的评估记录。
 
-## 开始使用
+## 运行
+
+在项目根目录的 PowerShell 中执行；首次安装见 [快速开始](docs/quickstart.md)。
 
 ```powershell
-.\.venv\Scripts\python.exe -m traffic_rl doctor
-.\.venv\Scripts\python.exe -m traffic_rl show --layouts intersection crossroads tjunction roundabout --scenarios balanced peak surge --seconds 300
+.\.venv\Scripts\python.exe -m traffic_rl train --steps 30000 --out outputs/my_model
+.\.venv\Scripts\python.exe -m traffic_rl evaluate --model outputs/my_model/model.zip --out outputs/my_evaluation
+.\.venv\Scripts\python.exe -m traffic_rl show --model outputs/my_model/model.zip --out outputs/my_demo
 ```
 
-首次安装见 [快速开始](docs/quickstart.md)。导出后打开 `index.html`，无需联网或再次启动 SUMO。
+输出目录必须使用新名字。训练生成模型和学习曲线；评估生成固定配时与 DQN 的结果表、对比图及报告；展示命令生成可回放网页。
 
-实验台采用单屏布局：地图、右侧信息与底部播放控制。交通演示用于观察和比较，学习模式用于逐步查看状态、动作和奖励；长内容通过分页弹窗查看。
+## 代码
 
-## 文档入口
+```text
+traffic_rl/
+  config.py       配置校验与 SUMO 路径
+  network.py      唯一十字路口
+  demand.py       综合车流生成
+  env.py          状态、动作、奖励和信号约束
+  agent.py        DQN 创建与加载
+  train.py        训练、保存和学习曲线
+  evaluate.py     固定配时对照、独立测试
+  metrics.py      等待、队列与完成率
+  replay.py       真实轨迹与决策导出
+  package.py      网页资源与轨迹打包
+  artifacts.py    输出目录与运行版本记录
+  doctor.py       环境检查
+  __main__.py     命令入口
+  web/            单屏展示
+configs/          参数
+tests/           关键正确性测试
+docs/            学习与报告说明
+```
 
-- [快速开始](docs/quickstart.md)：安装、演示、离线分享。
-- [项目结构](docs/architecture.md)：目录职责与团队分工。
-- [学习指南](docs/learning.md)：状态、动作、奖励和道路区别。
-- [实验指南](docs/experiments.md)：训练、评估、指标与测试。
+## 学习入口
 
-配置位于 `configs/`，代码位于 `traffic_rl/`，测试位于 `tests/`。生成路网与实验产物分别存放在 `data/generated/` 和 `outputs/`，不上传仓库。
+- [快速开始](docs/quickstart.md)：安装与运行。
+- [模型与代码](docs/learning.md)：14 维状态、4 个动作和奖励。
+- [实验设计](docs/experiments.md)：复现、指标与改进实验。
+- [课程报告框架](docs/report.md)：从问题到结论的写作顺序。
 
-本项目使用合成车流；短程模型只验证训练流程，不代表策略已经收敛。环岛目前为单车道逆时针通行。
+数据为合成交通，未经实地校准。DQN 不保证优于固定配时。旧版多路网命令已移除，旧 13/22 维模型需重新训练；历史版本保留在 Git 中。`outputs/` 和生成路网不入库。

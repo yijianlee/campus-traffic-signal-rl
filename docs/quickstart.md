@@ -1,6 +1,8 @@
 # 快速开始
 
-在项目根目录运行 PowerShell。已有 `.venv` 时跳过安装。
+在项目根目录打开 PowerShell。
+
+首次安装：
 
 ```powershell
 py -3.12 -m venv .venv
@@ -8,25 +10,24 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m traffic_rl doctor
 ```
 
-打开单屏实验台：
+完整课程实验：
 
 ```powershell
-.\.venv\Scripts\python.exe -m traffic_rl show --layouts intersection crossroads tjunction roundabout --scenarios balanced peak surge --seconds 300
+.\.venv\Scripts\python.exe -m traffic_rl train --steps 30000 --out outputs/my_model
+.\.venv\Scripts\python.exe -m traffic_rl evaluate --model outputs/my_model/model.zip --out outputs/my_evaluation
+.\.venv\Scripts\python.exe -m traffic_rl show --model outputs/my_model/model.zip --out outputs/my_demo
 ```
 
-首次导出会运行 SUMO。完成后自动打开页面；之后双击输出目录中的 `index.html` 即可离线回放。分享时保留整个文件夹。
+先验证流程可用 `train --steps 3000 --seconds 600`，并在 evaluate/show 中同样传入 `--seconds 600`。短训练不代表模型已经学好。每次实验使用新输出目录，避免混淆或覆盖结果。
 
-- **交通演示**：选择道路、车流、策略；右侧切换当前路况与整段结果。
-- **学习模式**：上一步 / 下一步查看已完成决策；初始时刻不提前显示奖励。
-- **更多信息**：状态向量、实验参数和使用说明采用分页弹窗。
-- **视图**：拖动平移、滚轮缩放、复位；播放倍速不改变仿真结果。
+本机本次已生成 `outputs/course_dqn`、`outputs/course_evaluation`、`outputs/course_demo`，分别为短训练、独立测试与展示。它们不随 Git 克隆分发。
 
-界面以 2560×1440 屏幕为主要目标，同时适配系统缩放后的桌面窗口。较矮窗口中，状态、动作、奖励切换查看，页面不滚动。
-
-已有历史回放可直接更新展示界面，无需再次仿真：
+已有演示无需重新仿真：
 
 ```powershell
-.\.venv\Scripts\python.exe -m traffic_rl.replay.package --source outputs/旧回放目录 --out outputs/新回放目录
+.\.venv\Scripts\python.exe -m http.server 8769 --bind 127.0.0.1 --directory outputs/course_demo
 ```
 
-`--out` 使用新目录，避免覆盖已有实验。训练与评估见 [实验指南](experiments.md)。
+访问 http://127.0.0.1:8769/，终端保持开启；Ctrl+C 停止服务。也可用普通浏览器打开导出目录的 index.html，分享时保留整个文件夹。
+
+页面仅有十字路口综合车流与 DQN。交通演示查看路况；学习模式用下一步查看真实的状态、动作和奖励。播放不会训练模型。界面适配 2K 单屏，小窗口中学习内容通过标签切换。
