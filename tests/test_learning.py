@@ -18,7 +18,7 @@ class LearningTests(unittest.TestCase):
             data, folder = present(args, config)
         self.assertEqual({s["id"] for s in data["layouts"]}, {"intersection", "tjunction", "roundabout"})
         self.assertEqual(len(data["runs"]), 12)
-        self.assertTrue((folder / "renderer.js").exists())
+        self.assertTrue((folder / "scripts/renderer.js").exists())
         for run in data["runs"]:
             decisions = run["decisions"]
             self.assertEqual(len(decisions), 8)

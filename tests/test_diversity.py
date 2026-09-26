@@ -1,3 +1,4 @@
+from traffic_rl.replay.package import read_package
 """Exercise topology connectivity, signal clearance and shared policy spaces."""
 import contextlib
 import io
@@ -107,7 +108,7 @@ class DiversityTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             present(Namespace(model=None, out=None, seed=101, scenarios=["surge"], no_open=True), self.config("roundabout", 120))
         page = Path(output.getvalue().split("Presentation ready: ")[-1].strip())
-        data = json.loads((page.parent / "recordings.js").read_text(encoding="utf-8").removeprefix("window.TRAFFIC_REPLAY=").removesuffix(";"))
+        data = read_package(page.parent)
         self.assertEqual(len(data["geometry"]["signals"]), 4)
         self.assertTrue(any(l["id"].startswith("ring_") for l in data["geometry"]["lanes"]))
         self.assertEqual(len({r["demandHash"] for r in data["runs"]}), 1)

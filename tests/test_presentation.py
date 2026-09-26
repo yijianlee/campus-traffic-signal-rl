@@ -1,3 +1,4 @@
+from traffic_rl.replay.package import read_package
 """Verify a real portable replay export, including metrics and shared demand."""
 import contextlib
 import io
@@ -18,8 +19,7 @@ class PresentationTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             present(Namespace(model=None, out=None, seed=101, scenarios=["balanced"], no_open=True), config)
         page = Path(output.getvalue().split("Presentation ready: ")[-1].strip())
-        text = (page.parent / "recordings.js").read_text(encoding="utf-8")
-        data = json.loads(text.removeprefix("window.TRAFFIC_REPLAY=").removesuffix(";"))
+        data = read_package(page.parent)
         self.assertEqual(len(data["runs"]), 2)
         self.assertEqual(data["runs"][0]["demandHash"], data["runs"][1]["demandHash"])
         self.assertIsNone(data["modelNote"])
@@ -33,7 +33,7 @@ class PresentationTests(unittest.TestCase):
                 self.assertEqual(len(frame["q"]), 4)
                 self.assertFalse(frame["light"][0].lower() == "g" and frame["light"][2].lower() == "g")
                 self.assertEqual(len({v[0] for v in frame["v"]}), len(frame["v"]))
-        for name in ("index.html", "style.css", "app.js", "recordings.js", "manifest.json"):
+        for name in ("index.html", "styles/app.css", "scripts/app.js", "recordings.js", "manifest.json"):
             self.assertTrue((page.parent / name).is_file(), name)
 
 
