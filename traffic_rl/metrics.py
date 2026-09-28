@@ -45,7 +45,11 @@ def episode_metrics(tripinfo: Path, route_file: Path, duration: int, trace: list
         "switches": sum(row["switched"] for row in trace),
         "forced_switches": sum(row["forced_switch"] for row in trace),
     }
+    result["red_guard_count"] = sum(row.get("red_guard", 0) for row in trace)
     for direction in "NSEW":
+        result[f"requested_{direction}"] = sum(row.get("requested_action") == "NSEW".index(direction) for row in trace)
+        result[f"max_red_{direction}_s"] = max((row.get(f"max_red_{direction}", 0) for row in trace), default=0)
+        result[f"green_seconds_{direction}"] = trace[-1].get(f"green_seconds_{direction}", 0) if trace else 0
         result[f"mean_wait_plus_entry_delay_{direction}_s"] = mean([cost for vid, cost in costs.items() if vid.startswith(direction + "_")])
     if trace and "collisions" in trace[-1]:
         result["collision_vehicle_events"] = trace[-1]["collisions"]

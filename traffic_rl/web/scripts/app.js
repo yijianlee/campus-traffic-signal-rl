@@ -7,7 +7,7 @@
   let loading=true;
   const renderer=new window.TrafficRenderer($('map'));
   const clock=s=>`${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;
-  const fmt=v=>Number(v).toFixed(2).replace(/\.00$/,'');
+  const fmt=v=>Number(v).toFixed(3).replace(/\.?0+$/,'');
   const actionName=a=>['北进口放行','南进口放行','东进口放行','西进口放行'][a];
   function setPlaying(value){playing=value;last=null;$('play').textContent=value?'Ⅱ 暂停':'▶ 播放';$('state-label').textContent=value?'正在回放':t>=data.duration?'回放结束':'已暂停';}
   async function loadRun(){
@@ -21,10 +21,21 @@
     $('run-description').textContent=`综合车流 · ${run.planned} 辆计划到达 · 测试种子 ${data.seed}`;
     $('final-wait').textContent=run.metrics.mean_wait_plus_entry_delay_all_s.toFixed(1)+' 秒';
     $('completion-rate').textContent=(run.metrics.completion_rate*100).toFixed(1)+'%';
+    if(data.comparison?.length){
+      $('comparison').hidden=false;
+      $('comparison-scope').textContent=`${data.comparison[0].seeds} 组车流均值 · 相同信号约束`;
+      $('comparison-rows').replaceChildren(...data.comparison.map(row=>{
+        const tr=document.createElement('tr');
+        for(const value of [row.policy==='fixed'?'固定配时':'DQN',Number(row.mean_wait_plus_entry_delay_all_s_mean).toFixed(1),Number(row.mean_queue_sampled_mean).toFixed(1),(Number(row.completion_rate_mean)*100).toFixed(1)+'%']){
+          const td=document.createElement('td');td.textContent=value;tr.append(td);
+        }
+        return tr;
+      }));
+    }
     updateInfo();
   }
   function updateInfo(){
-    const items=[['模型',data.modelNote||'训练程度未知'],['测试种子',data.seed],['回合长度',data.duration+' 秒'],['状态 / 动作','14 维 / 4 个方向'],['车流','时变泊松到达，直行约 50%，左右转各约 25%'],['决策周期',data.simulation.delta_time+' 秒'],['物理步长',data.simulation.step_length+' 秒'],['绿灯范围',`${data.simulation.min_green}–${data.simulation.max_green} 秒`],['黄灯 / 全红',`${data.simulation.yellow_time} / ${data.simulation.delta_time-data.simulation.yellow_time} 秒`],['奖励','周期平均停车车辆惩罚＋切换惩罚'],['数据来源','合成车流，未实地校准'],['到达文件 SHA256',run.demandHash]];
+    const items=[['模型',data.modelNote||'训练程度未知'],['测试种子',data.seed],['回合长度',data.duration+' 秒'],['状态 / 动作',`${run.observationLabels.length} 维 / 4 个方向`],['车流','时变泊松到达，直行约 50%，左右转各约 25%'],['决策周期',data.simulation.delta_time+' 秒'],['物理步长',data.simulation.step_length+' 秒'],['绿灯范围',`${data.simulation.min_green}–${data.simulation.max_green} 秒`],['黄灯 / 全红',`${data.simulation.yellow_time} / ${data.simulation.delta_time-data.simulation.yellow_time} 秒`],['奖励','周期平均停车车辆惩罚＋切换惩罚'],['数据来源','合成车流，未实地校准'],['到达文件 SHA256',run.demandHash]];
     window.paginate($('experiment-info'),items,5,(target,rows)=>{
       const list=document.createElement('dl');
       for(const [label,value] of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;list.append(dt,dd);}

@@ -13,19 +13,19 @@ py -3.12 -m venv .venv
 完整课程实验：
 
 ```powershell
-.\.venv\Scripts\python.exe -m traffic_rl train --steps 30000 --out outputs/my_model
-.\.venv\Scripts\python.exe -m traffic_rl evaluate --model outputs/my_model/model.zip --out outputs/my_evaluation
-.\.venv\Scripts\python.exe -m traffic_rl show --model outputs/my_model/model.zip --out outputs/my_demo
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json train --steps 30000 --out outputs/my_model
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json evaluate --model outputs/my_model/best_model.zip --out outputs/my_evaluation
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json show --model outputs/my_model/best_model.zip --evaluation outputs/my_evaluation --seed 201 --out outputs/my_demo
 ```
 
-先验证流程可用 `train --steps 3000 --seconds 600`，并在 evaluate/show 中同样传入 `--seconds 600`。短训练不代表模型已经学好。每次实验使用新输出目录，避免混淆或覆盖结果。
+上述命令使用改进配置，默认每回合 600 秒，自动用验证集保存 best_model.zip。原版对照使用 configs/default.json。快速验证流程可把训练步数改成 3000；训练结束仍会验证并保存最佳模型。短训练不代表模型已经学好。每次实验使用新输出目录，避免混淆或覆盖结果。
 
-本机本次已生成 `outputs/course_dqn`、`outputs/course_evaluation`、`outputs/course_demo`，分别为短训练、独立测试与展示。它们不随 Git 克隆分发。
+本机改进模型为 `outputs/normalized_final42/best_model.zip`，独立评估为 `outputs/test_final42`，演示为 `outputs/improved_demo`。它们不随 Git 克隆分发。
 
 已有演示无需重新仿真：
 
 ```powershell
-.\.venv\Scripts\python.exe -m http.server 8769 --bind 127.0.0.1 --directory outputs/course_demo
+.\.venv\Scripts\python.exe -m http.server 8769 --bind 127.0.0.1 --directory outputs/improved_demo
 ```
 
 访问 http://127.0.0.1:8769/，终端保持开启；Ctrl+C 停止服务。也可用普通浏览器打开导出目录的 index.html，分享时保留整个文件夹。

@@ -1,4 +1,4 @@
-"""One turning intersection: 14 observations, four approach-release actions."""
+"""One turning intersection: 14 or 18 observations, four approach-release actions."""
 from __future__ import annotations
 
 import copy
@@ -30,7 +30,8 @@ class IntersectionEnv(gym.Env):
         self.additional_sumo_cmd = ""
         self.sumo = None
         self.action_space = gym.spaces.Discrete(4)
-        self.observation_space = gym.spaces.Box(0, 1, (14,), np.float32)
+        self.wait_state = config["simulation"].get("observe_red_age", False)
+        self.observation_space = gym.spaces.Box(0, 1, (18 if self.wait_state else 14,), np.float32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -58,6 +59,8 @@ class IntersectionEnv(gym.Env):
         label = uuid.uuid4().hex
         traci.start(command, label=label, doSwitch=False)
         self.sumo = traci.getConnection(label)
+        self.sumo.simulation.subscribe([traci.constants.VAR_COLLIDING_VEHICLES_NUMBER, traci.constants.VAR_TELEPORT_STARTING_VEHICLES_NUMBER])
+        self.sumo.junction.subscribeContext("J", traci.constants.CMD_GET_VEHICLE_VARIABLE, 2 * sim["road_length_m"], [traci.constants.VAR_SPEED])
         self.links = {}
         for link in ET.parse(net).getroot().findall("connection"):
             if link.get("tl"):
@@ -65,6 +68,9 @@ class IntersectionEnv(gym.Env):
         self.phase = DIRECTIONS.index(self.active[0])
         self.green_age = 0
         self.sim_step = 0
+        self.red_age = [0] * 4
+        self.max_red_seen = [0] * 4
+        self.green_seconds = [0] * 4
         self.switches = self.forced_switches = self.collisions = self.teleports = 0
         self._lights("G")
         return self._observation(), {}
@@ -86,9 +92,16 @@ class IntersectionEnv(gym.Env):
         # Poll every physics tick so collision/teleport events cannot be skipped.
         for _ in range(round(1 / self.config["simulation"]["step_length"])):
             self.sumo.simulationStep()
-            self.collisions += self.sumo.simulation.getCollidingVehiclesNumber()
-            self.teleports += self.sumo.simulation.getStartingTeleportNumber()
+            events = self.sumo.simulation.getSubscriptionResults()
+            self.collisions += events[traci.constants.VAR_COLLIDING_VEHICLES_NUMBER]
+            self.teleports += events[traci.constants.VAR_TELEPORT_STARTING_VEHICLES_NUMBER]
         self.sim_step += 1
+        lights = self.light_state()
+        for i in range(4):
+            green = lights[i].lower() == "g"
+            self.red_age[i] = 0 if green else self.red_age[i] + 1
+            self.max_red_seen[i] = max(self.max_red_seen[i], self.red_age[i])
+            self.green_seconds[i] += int(green)
 
     def queues(self):
         return {d: self.sumo.lane.getLastStepHaltingNumber(f"{d}_in_0") if d in self.active else 0 for d in DIRECTIONS}
@@ -98,7 +111,8 @@ class IntersectionEnv(gym.Env):
         queue = [min(q / 40, 1) for q in self.queues().values()]
         density = [min(self.sumo.lane.getLastStepVehicleNumber(f"{d}_in_0") / max(1, self.sumo.lane.getLength(f"{d}_in_0") / 7.5), 1) if d in self.active else 0 for d in DIRECTIONS]
         return np.array(queue + density + [float(i == self.phase) for i in range(4)]
-                        + [min(self.green_age / sim["max_green"], 1), self.sim_step / sim["duration_seconds"]], dtype=np.float32)
+                        + [min(self.green_age / sim["max_green"], 1), self.sim_step / sim["duration_seconds"]]
+                        + ([min(age / sim.get("max_red", 120), 1) for age in self.red_age] if self.wait_state else []), dtype=np.float32)
 
     def step(self, action):
         if not self.action_space.contains(action):
@@ -112,6 +126,21 @@ class IntersectionEnv(gym.Env):
         if forced:
             selected = DIRECTIONS.index(self.active[(self.active.index(DIRECTIONS[self.phase]) + 1) % len(self.active)])
             self.forced_switches += 1
+        red_forced = False
+        # Oldest red gets priority; reserve clearance time and respect minimum green.
+        limit = sim.get("max_red", 0)
+        pending = sorted((i for i in range(4) if i != self.phase), key=lambda i: self.red_age[i], reverse=True)
+        oldest = pending[0]
+        if selected == self.phase:
+            # Hold for one decision, then clear and serve remaining directions oldest first.
+            urgent = any(self.red_age[i] + 2 * sim["delta_time"] + rank * (sim["min_green"] + sim["delta_time"]) > limit for rank, i in enumerate(pending))
+        else:
+            # A switch commits to clearance and a full minimum green before another switch.
+            remaining = sorted((i for i in range(4) if i != selected), key=lambda i: self.red_age[i], reverse=True)
+            urgent = any(self.red_age[i] + 2 * sim["delta_time"] + sim["min_green"] + rank * (sim["min_green"] + sim["delta_time"]) > limit for rank, i in enumerate(remaining))
+        if limit and not min_blocked and urgent:
+            selected = oldest
+            red_forced = True
         switched = selected != self.phase
         if switched:
             self.switches += 1
@@ -123,7 +152,8 @@ class IntersectionEnv(gym.Env):
             else:
                 self._lights("G")
             self._sumo_step()
-            waiting += sum(self.sumo.vehicle.getSpeed(v) < .1 for v in self.sumo.vehicle.getIDList())
+            vehicles = self.sumo.junction.getContextSubscriptionResults("J") or {}
+            waiting += sum(values[traci.constants.VAR_SPEED] < .1 for values in vehicles.values())
         if switched:
             self.phase, self.green_age = selected, 0
             self._lights("G")
@@ -132,8 +162,11 @@ class IntersectionEnv(gym.Env):
         q = self.queues()
         stopped = waiting / sim["delta_time"]
         reward = -float(stopped) * self.config["reward"]["queue_weight"] - float(switched) * self.config["reward"]["switch_weight"]
-        info = {"step": self.sim_step, "requested_action": requested, "selected_action": self.phase, "phase": self.phase, "green_age": self.green_age, "switched": int(switched), "forced_switch": int(forced), "queue_total": sum(q.values()), "collisions": self.collisions, "teleports": self.teleports, **{f"queue_{d}": v for d, v in q.items()}}
-        info["action_reason"] = "max_green" if forced else "min_green" if min_blocked and requested != previous else "switch" if switched else "hold"
+        info = {"step": self.sim_step, "requested_action": requested, "selected_action": self.phase, "phase": self.phase, "green_age": self.green_age, "switched": int(switched), "forced_switch": int(forced or red_forced), "red_guard": int(red_forced), "queue_total": sum(q.values()), "collisions": self.collisions, "teleports": self.teleports, **{f"queue_{d}": v for d, v in q.items()}}
+        info.update({f"red_age_{d}": self.red_age[i] for i, d in enumerate(DIRECTIONS)})
+        info.update({f"max_red_{d}": self.max_red_seen[i] for i, d in enumerate(DIRECTIONS)})
+        info.update({f"green_seconds_{d}": self.green_seconds[i] for i, d in enumerate(DIRECTIONS)})
+        info["action_reason"] = "max_red" if red_forced else "max_green" if forced else "min_green" if min_blocked and requested != previous else "switch" if switched else "hold"
         info["reward_terms"] = {"stopped": -float(stopped) * self.config["reward"]["queue_weight"], "switch": -float(switched) * self.config["reward"]["switch_weight"]}
         info["reward_inputs"] = {"stopped": stopped, "switch": int(switched)}
         return self._observation(), reward, False, self.sim_step >= sim["duration_seconds"], info
@@ -150,4 +183,4 @@ class IntersectionEnv(gym.Env):
 
 def validate_model(model, env):
     if model.observation_space.shape != env.observation_space.shape or model.action_space.n != env.action_space.n:
-        raise ValueError("Model is incompatible with the 14-state course environment. Retrain with the current train command.")
+        raise ValueError("Model observation/action dimensions are incompatible with this configuration. Retrain with the current train command.")

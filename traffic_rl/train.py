@@ -25,7 +25,8 @@ def train(args, config):
         model = create_model(env, settings, seed)
         model.set_logger(configure(str(run), ["stdout", "csv"]))
         before = [parameter.detach().clone() for parameter in model.q_net.parameters()]
-        model.learn(total_timesteps=steps, log_interval=5)
+        callback = validation_callback(config, run) if config.get("validation") else None
+        model.learn(total_timesteps=steps, log_interval=5, callback=callback)
         changed = any(not torch.equal(old, new.detach()) for old, new in zip(before, model.q_net.parameters()))
         model.save(run / "model")
         # Verify deserialization and prediction, not only successful writing.
@@ -62,3 +63,49 @@ def plot_training(folder):
     ax.legend(); ax.grid(alpha=.15); fig.tight_layout()
     fig.savefig(folder / "learning_curve.png", dpi=160)
     plt.close(fig)
+
+
+def validation_callback(config, run):
+    """Select checkpoints on validation demand only; never inspect test seeds."""
+    from stable_baselines3.common.callbacks import BaseCallback
+    from .env import IntersectionEnv
+    from .demand import routes
+    from .metrics import episode_metrics, write_csv
+
+    class Validate(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.best = float("inf")
+            self.rows = []
+
+        def _on_step(self):
+            settings = config["validation"]
+            if self.num_timesteps % settings["frequency"] and self.num_timesteps != self.model._total_timesteps:
+                return True
+            self.model.save(run / f"checkpoint_{self.num_timesteps}")
+            scores = []
+            for seed in settings["seeds"]:
+                trip = run / "validation" / f"{self.num_timesteps}_{seed}.xml"
+                env = IntersectionEnv(config, seed, tripinfo=trip)
+                trace = []
+                try:
+                    obs, _ = env.reset()
+                    done = False
+                    while not done:
+                        action = int(self.model.predict(obs, deterministic=True)[0])
+                        obs, _, _, done, info = env.step(action)
+                        trace.append(info)
+                finally:
+                    env.close()
+                metrics = episode_metrics(trip, routes(config, seed)[0], config["simulation"]["duration_seconds"], trace)
+                scores.append(metrics["mean_wait_plus_entry_delay_all_s"])
+                self.rows.append({"steps": self.num_timesteps, "seed": seed, **metrics})
+            score = sum(scores) / len(scores)
+            write_csv(run / "validation.csv", self.rows)
+            if score < self.best:
+                self.best = score
+                self.model.save(run / "best_model")
+                save_json(run / "best.json", {"steps": self.num_timesteps, "validation_wait": score, "validation_seeds": settings["seeds"]})
+            print(f"Validation step={self.num_timesteps}: wait={score:.2f}s best={self.best:.2f}s", flush=True)
+            return True
+    return Validate()

@@ -10,7 +10,7 @@
 <section class="signal-panel"><div class="panel-title">信号与排队 <span id="phase-label">南北放行</span></div></section>
 <section class="queue-panel"><div class="panel-title">各方向排队 <span>辆</span></div><div id="direction-queues"></div></section>
 <section class="strategy-note"><span class="note-symbol">↗</span><div><b id="policy-title">DQN 控制</b><p id="policy-note"></p><p id="last-action"></p></div></section>
-</div><section class="bottom-row" id="results" hidden><div><h2>整段回放结果</h2><p id="run-description"></p><p>完整记录统计，不随播放进度变化。</p></div><div class="result"><span>整段回放 · 平均等待＋入网延迟</span><strong id="final-wait">—<small>秒</small></strong></div><div class="result"><span>整段回放 · 行程完成率</span><strong id="completion-rate">—</strong></div></section>
+</div><section class="bottom-row" id="results" hidden><div><h2>整段回放结果</h2><p id="run-description"></p><p>完整记录统计，不随播放进度变化。</p></div><div class="result"><span>整段回放 · 平均等待＋入网延迟</span><strong id="final-wait">—<small>秒</small></strong></div><div class="result"><span>整段回放 · 行程完成率</span><strong id="completion-rate">—</strong></div><div id="comparison" hidden><h2>独立车流对照</h2><p id="comparison-scope"></p><table><thead><tr><th>策略</th><th>等待 / 秒</th><th>排队 / 辆</th><th>完成率</th></tr></thead><tbody id="comparison-rows"></tbody></table></div></section>
 </div><section id="learning" class="learning" hidden>
 <div class="learning-heading"><div><h2 id="decision-title"></h2></div></div>
 <div class="learning-tabs segments"><button data-learning="0" class="active">状态</button><button data-learning="1">动作</button><button data-learning="2">奖励</button></div><div class="learning-grid">

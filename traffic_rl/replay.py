@@ -28,7 +28,11 @@ def present(args, config):
         metadata = Path(args.model).resolve().parent / "run.json"
         if metadata.exists():
             info = json.loads(metadata.read_text(encoding="utf-8"))
-            model_note = f"{info.get('actual_steps', '未知')} 步训练；效果需独立评估"
+            trained_steps = info.get("actual_steps", "未知")
+            best = metadata.parent / "best.json"
+            if Path(args.model).stem == "best_model" and best.exists():
+                trained_steps = json.loads(best.read_text(encoding="utf-8"))["steps"]
+            model_note = f"{trained_steps} 步训练；效果需独立评估"
         else:
             model_note = "用户提供模型；训练程度未验证"
     run = output_dir(args.out, "presentation")
@@ -38,6 +42,16 @@ def present(args, config):
     junction = net.find("junction[@id='J']")
     center = [float(junction.get("x")), float(junction.get("y"))] if junction is not None else [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
     data = {"version": 1, "duration": duration, "sampleInterval": 0.2, "seed": args.seed, "center": center, "source": "SUMO simulation / synthetic demand", "modelNote": model_note, "runs": []}
+    if getattr(args, "evaluation", None):
+        import csv
+        evaluation = Path(args.evaluation)
+        provenance = json.loads((evaluation / "run.json").read_text(encoding="utf-8"))
+        digest = hashlib.sha256(Path(args.model).read_bytes()).hexdigest()
+        if provenance["model_sha256"] != digest or provenance["config"] != config:
+            raise ValueError("Comparison must use the same model and simulation configuration as the replay.")
+        with (evaluation / "aggregate.csv").open(encoding="utf-8-sig") as handle:
+            data["comparison"] = list(csv.DictReader(handle))
+        data["modelNote"] = f"{model_note.split('；')[0]} · {len(provenance['seeds'])} 组独立车流评估"
     layout = "crossroads"
     data["layout"] = layout
     def points(shape):
@@ -66,7 +80,8 @@ def present(args, config):
 
         light_state = env.light_state
         observation_labels = ([f"{d} {label}" for label in ("排队比例", "密度", "放行相位") for d in "NSEW"]
-                              + ["绿灯年龄比例", "回合进度"])
+                              + ["绿灯年龄比例", "回合进度"]
+                              + ([f"{d} 红灯时间比例" for d in "NSEW"] if env.wait_state else []))
         def snapshot():
             lane = env.sumo.lane
             return {"queue": env.queues(), "greenAge": float(env.green_age), "light": light_state(),

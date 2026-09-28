@@ -9,12 +9,14 @@
 在项目根目录的 PowerShell 中执行；首次安装见 [快速开始](docs/quickstart.md)。
 
 ```powershell
-.\.venv\Scripts\python.exe -m traffic_rl train --steps 30000 --out outputs/my_model
-.\.venv\Scripts\python.exe -m traffic_rl evaluate --model outputs/my_model/model.zip --out outputs/my_evaluation
-.\.venv\Scripts\python.exe -m traffic_rl show --model outputs/my_model/model.zip --out outputs/my_demo
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json train --steps 30000 --out outputs/my_model
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json evaluate --model outputs/my_model/best_model.zip --out outputs/my_evaluation
+.\.venv\Scripts\python.exe -m traffic_rl --config configs/normalized.json show --model outputs/my_model/best_model.zip --evaluation outputs/my_evaluation --seed 201 --out outputs/my_demo
 ```
 
 输出目录必须使用新名字。训练生成模型和学习曲线；评估生成固定配时与 DQN 的结果表、对比图及报告；展示命令生成可回放网页。
+
+已完成 3 个训练种子 × 10 组独立车流测试，结果见 [改进实验结果](docs/improvement-results.md)。
 
 ## 代码
 
@@ -42,7 +44,7 @@ docs/            学习与报告说明
 ## 学习入口
 
 - [快速开始](docs/quickstart.md)：安装与运行。
-- [模型与代码](docs/learning.md)：14 维状态、4 个动作和奖励。
+- [模型与代码](docs/learning.md)：原版 14 维 / 改进版 18 维状态、4 个动作和奖励。
 - [实验设计](docs/experiments.md)：复现、指标与改进实验。
 - [课程报告框架](docs/report.md)：从问题到结论的写作顺序。
 

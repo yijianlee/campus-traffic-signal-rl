@@ -19,6 +19,7 @@ def main():
     show.add_argument("--model", required=True)
     show.add_argument("--seed", type=int, default=101)
     show.add_argument("--no-open", action="store_true")
+    show.add_argument("--evaluation", help="Matching evaluation folder for the compact comparison table")
     for command in (build, train, evaluate, show):
         command.add_argument("--seconds", type=int)
     for command in (train, evaluate, show):

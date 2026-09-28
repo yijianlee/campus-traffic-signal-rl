@@ -72,11 +72,34 @@ class CourseTests(unittest.TestCase):
             self.assertAlmostEqual(reward, sum(info["reward_terms"].values()))
             done = False
             while not done:
-                _, _, _, done, info = env.step(env.phase)
+                _, reward, _, done, info = env.step(env.phase)
+                self.assertAlmostEqual(reward, -sum(samples[-5:]) / 5 - .2 * info["switched"])
             self.assertGreater(env.forced_switches, 0)
             self.assertEqual(env.collisions, 0)
             self.assertEqual(env.teleports, 0)
             self.assertTrue(all(sum(c.lower() == 'g' for c in light) <= 1 for light in lights))
+        finally:
+            env.close()
+
+    def test_red_guard_prevents_direction_starvation(self):
+        config = read_config("configs/improved.json")
+        config["simulation"]["duration_seconds"] = 1800
+        env = IntersectionEnv(config, 11)
+        try:
+            obs, _ = env.reset()
+            self.assertEqual(obs.shape, (18,))
+            guarded = 0
+            done = False
+            while not done:
+                obs, reward, _, done, info = env.step(3)
+                guarded += info["red_guard"]
+                self.assertTrue(env.observation_space.contains(obs))
+                self.assertAlmostEqual(reward, sum(info["reward_terms"].values()))
+            self.assertGreater(guarded, 0)
+            self.assertTrue(all(age <= 120 for age in env.max_red_seen))
+            self.assertTrue(all(seconds > 0 for seconds in env.green_seconds))
+            self.assertEqual(env.collisions, 0)
+            self.assertEqual(env.teleports, 0)
         finally:
             env.close()
 
@@ -87,6 +110,7 @@ class CourseTests(unittest.TestCase):
         from traffic_rl.package import read_package
         folder = output_dir(None, "replay_test")
         config = self.config(20)
+        config["simulation"].update(observe_red_age=True, max_red=120)
         env = IntersectionEnv(config, 101)
         model = DQN("MlpPolicy", env, seed=42, device="cpu")
         model.save(folder / "model")
@@ -97,7 +121,7 @@ class CourseTests(unittest.TestCase):
         self.assertEqual(run["policy"], "dqn")
         self.assertEqual(len(run["decisions"]), 4)
         self.assertEqual(len(run["frames"]), 101)
-        self.assertEqual(len(run["observationLabels"]), 14)
+        self.assertEqual(len(run["observationLabels"]), 18)
         self.assertEqual(run["frames"][-1]["completed"], run["metrics"]["completed_vehicles"])
         for i, decision in enumerate(run["decisions"]):
             self.assertAlmostEqual(decision["reward"], sum(decision["rewardTerms"].values()))

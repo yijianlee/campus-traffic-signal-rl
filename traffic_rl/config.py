@@ -51,6 +51,11 @@ def read_config(path: str | Path | None = None) -> dict:
             raise ValueError(f"{key} must be a positive multiple of delta_time.")
     if not sim["min_green"] <= sim["fixed_green"] <= sim["max_green"]:
         raise ValueError("Require min_green <= fixed_green <= max_green.")
+    max_red = sim.get("max_red", 0)
+    if sim.get("observe_red_age") and not max_red:
+        raise ValueError("observe_red_age requires a positive max_red normalization limit.")
+    if max_red and (max_red % delta or max_red < 3 * (sim["min_green"] + delta) + delta):
+        raise ValueError("max_red must be a multiple of delta_time and allow a full minimum-green cycle.")
     demand = config["demand"]
     if demand["base_rate"] <= 0 or demand["segment_seconds"] <= 0:
         raise ValueError("Demand rate and segment duration must be positive.")
@@ -58,6 +63,15 @@ def read_config(path: str | Path | None = None) -> dict:
         raise ValueError("Demand jitter must be in [0, 1).")
     if sim["road_length_m"] <= 60 or sim["speed_limit_mps"] <= 0:
         raise ValueError("Invalid road dimensions or speed.")
+    validation = config.get("validation")
+    if validation:
+        seeds = validation["seeds"]
+        if not seeds or len(seeds) != len(set(seeds)) or any(not 0 <= seed < 100000 for seed in seeds):
+            raise ValueError("Validation seeds must be unique and in [0, 100000).")
+        if set(seeds) & set(config["evaluation"]["seeds"]):
+            raise ValueError("Validation and test seeds must be disjoint.")
+        if validation["frequency"] <= 0:
+            raise ValueError("Validation frequency must be positive.")
     return config
 
 
